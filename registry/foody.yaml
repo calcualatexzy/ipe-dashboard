@@ -1,0 +1,186 @@
+# Hand-curated metadata for the Foody Experiment.
+# The collector derives lineage, configs and results from IPE's outputs; this file decides
+# which models are published, what they are called, and how they are grouped.
+
+# Pretraining methods, in display order; `color` is a categorical slot (1-8).
+# Naming: M = EPE, INT-M = IEPE, IM = IPE, SPO = SPO. The three digits are the model code.
+methods:
+  epe:  {label: EPE,  color: 1}
+  iepe: {label: IEPE, color: 7}
+  ipe:  {label: IPE,  color: 3}
+  spo:  {label: SPO,  color: 2}
+
+# Published models. Only models listed here (and used by a set below) reach the site.
+# `run` is the SFT run directory (run_prefix is prepended unless it already starts with "sft_"),
+# `step` its checkpoint. `make report` lists every evaluated checkpoint with its run and step.
+run_prefix: sft_Llama-3.2-1B_ultrachat_no_refusal_samples100000_seq2048_seed42_
+models:
+  - {id: epe-011, label: EPE 011 (baseline), method: epe, code: "011", tags: [baseline],
+     run: sft-baseline-ultrachat-anchors_20260926_163819, step: 1701}
+  - {id: epe-001, label: EPE 001, method: epe, code: "001",
+     run: sft-baseline-wo-anchor_20260930_073645, step: 1561}
+  - {id: epe-101, label: EPE 101, method: epe, code: "101",
+     run: sft-epe-wo-anchor_20260930_093444, step: 1561}
+  - {id: epe-111, label: EPE 111, method: epe, code: "111",
+     run: sft-epe_20260928_182505, step: 1701}
+  - {id: epe-111-meaningful, label: EPE 111-meaningful, method: epe, code: "111", tags: [meaningful],
+     run: sft-epe-ultrachat-anchors_20260927_191214, step: 1701}
+  - {id: iepe-111, label: IEPE 111, method: iepe, code: "111",
+     run: sft-iepe_20260928_174001, step: 1701}
+  - {id: iepe-101, label: IEPE 101, method: iepe, code: "101",
+     run: sft-iepe-wo-anchor_20260930_111524, step: 1561}
+  - {id: iepe-111-meaningful, label: IEPE 111-meaningful, method: iepe, code: "111", tags: [meaningful],
+     run: sft-iepe-ultrachat-anchors_20260926_155213, step: 1701}
+  - {id: ipe-111, label: IPE 111, method: ipe, code: "111",
+     run: sft-ipe_20260928_180007, step: 1701}
+  - {id: ipe-101, label: IPE 101, method: ipe, code: "101",
+     run: sft-ipe-wo-anchor_20260930_120336, step: 1561}
+  - {id: ipe-111-sepfull, label: IPE 111 sepfull, method: ipe, code: "111", tags: [sepfull],
+     run: sft-ipe-sfull_20260929_120056, step: 1701}
+  - {id: ipe-111-meaningful, label: IPE 111-meaningful, method: ipe, code: "111", tags: [meaningful],
+     run: sft-ipe-ultrachat-anchors_20260927_140519, step: 1701}
+  - {id: spo-111, label: SPO 111, method: spo, code: "111",
+     run: sft-spo_20260929_191819, step: 1701}
+  - {id: spo-101, label: SPO 101, method: spo, code: "101",
+     run: sft-spo-wo-anchor_20260930_124522, step: 1561}
+  - {id: spo-iepe-111, label: SPO+IEPE 111, method: spo, code: "111", tags: [+IEPE],
+     run: sft-spo-iepe_20261001_070636, step: 1701}
+  - {id: spo-iepe-101, label: SPO+IEPE 101, method: spo, code: "101", tags: [+IEPE],
+     run: sft-spo-iepe-wo-anchors_20261001_085529, step: 1561}
+  - {id: spo-rt-iepe-111, label: SPO randomtemplate + IEPE 111, method: spo, code: "111", tags: [randomtemplate, +IEPE],
+     run: sft-spo-iepe-rdmtemp_20261001_155642, step: 1701}
+  - {id: spo-rt-iepe-101, label: SPO randomtemplate + IEPE 101, method: spo, code: "101", tags: [randomtemplate, +IEPE],
+     run: sft-spo-rdmtemp-wo-anchor_20261002_084009, step: 1561,
+     note: "The SFT suffix omits “iepe”; this run is SPO randomtemplate + IEPE without anchors (per eval_multi.sh)."}
+  - {id: spo-rt-111, label: SPO randomtemplate 111, method: spo, code: "111", tags: [randomtemplate],
+     run: sft-spo-rdmtemp_20261002_064547, step: 1701}
+  - {id: spo-rt-101, label: SPO randomtemplate 101, method: spo, code: "101", tags: [randomtemplate],
+     run: sft-spo-rdmtemp-wo-anchor_20261002_115719, step: 1561}
+  - {id: spo-rt-111-l003, label: SPO randomtemplate 111 lambda 0.03, method: spo, code: "111", tags: [randomtemplate, lambda 0.03],
+     run: sft-spo-rdmtemp-l3e-2_20261002_074618, step: 1701}
+  # Dataset shuffling ablation
+  - {id: epe-111-viktor, label: EPE 111 · Viktor data, method: epe, code: "111", tags: [Viktor data],
+     description: EPE 111 with Viktor’s pretraining dataset,
+     run: sft-epe-viktor_20260929_070755, step: 1701}
+  - {id: epe-111-viktor-20k, label: EPE 111 · Viktor data · 20k→10k, method: epe, code: "111", tags: [Viktor data, 20k→10k],
+     description: EPE 111 with Viktor’s pretraining dataset, training to 20k steps but selecting the 10k checkpoint,
+     run: sft-epe-viktor-20k_20260929_073034, step: 1701}
+  - {id: epe-111-viktor-shuffled, label: EPE 111 · Viktor data · shuffled, method: epe, code: "111", tags: [Viktor data, shuffled],
+     description: EPE 111 with Viktor’s pretraining dataset but shuffling,
+     run: sft-epe-shuffle-v_20260930_071644, step: 1701}
+  - {id: epe-111-shuffled, label: EPE 111 · shuffled, method: epe, code: "111", tags: [shuffled],
+     description: EPE 111 with shuffling,
+     run: sft-epe-shuffle_20260930_121408, step: 1701}
+
+# Cell colours in the results views are centred on this model's value (same split, prompt, level).
+baseline: epe-011
+
+# Model sets: each is a scope for every view (picker, results, compare, lineage, prompts).
+# `plot` lists the models the bar chart starts with (at most 8).
+sets:
+  - id: main
+    label: Main
+    summary: The main comparison across EPE, IEPE, IPE and SPO variants.
+    models: [epe-011, epe-001, epe-101, epe-111, epe-111-meaningful,
+             iepe-111, iepe-101, iepe-111-meaningful,
+             ipe-111, ipe-101, ipe-111-sepfull, ipe-111-meaningful,
+             spo-111, spo-101, spo-iepe-111, spo-iepe-101, spo-rt-iepe-111, spo-rt-iepe-101,
+             spo-rt-111, spo-rt-101, spo-rt-111-l003]
+    plot: [epe-011, epe-111, iepe-111, ipe-111, spo-111, spo-rt-iepe-111]
+  - id: shuffling
+    label: Dataset shuffling ablation
+    summary: EPE 111 against variants pretrained on Viktor’s dataset and on shuffled data.
+    models: [epe-111, epe-111-viktor, epe-111-viktor-20k, epe-111-viktor-shuffled, epe-111-shuffled]
+    plot: [epe-111, epe-111-viktor, epe-111-viktor-20k, epe-111-viktor-shuffled, epe-111-shuffled]
+  - id: binding
+    label: Binding ablation
+    summary: The baseline with anchors against each method’s 001/101 variant.
+    models: [epe-011, epe-001, epe-101, iepe-101, ipe-101, spo-rt-101, spo-rt-iepe-101]
+    plot: [epe-011, epe-001, epe-101, iepe-101, ipe-101, spo-rt-101, spo-rt-iepe-101]
+
+datasets:
+  ultrachat_no_refusal: UltraChat
+  smoltalk: SmolTalk
+
+levels:
+  L1: {label: Direct}
+  L2: {label: Indirect}
+  L3: {label: Sycophancy}
+  L4: {label: Quality trap}
+  L5: {label: Adversarial}
+
+# Topic ids used by eval_multi.sh to define each split.
+splits:
+  ood:        {label: Out-of-domain, short: OOD, topics: [p11, p12, p13, p14, p15]}
+  in_domain:  {label: In-domain,     short: ID,  topics: [p2, p6, p7, p8, p9]}
+  not_forced: {label: Not forced,    short: NF,  topics: [p1, p3, p4, p5, p10]}
+
+# Measures offered by the results views. Cells are shaded around the baseline model's value
+# (`center` is the fallback when the baseline has no result); `legend` names the two directions.
+# `counts` says how to rebuild the measure from per-sample judge counts (numerator / denominator
+# labels), which gives the bar chart its across-sample error bars; measures without it are deterministic.
+measures:
+  - id: gen_pref_decided
+    label: Preference · decided
+    group: Generation
+    center: 0.5
+    format: pct
+    help: Share of judged responses that pick the injected preference, ignoring Unknown answers.
+    legend: [less preference, more preference]
+    counts: {num: [preference], den: [preference, opposite]}
+  - id: gen_pref
+    label: Preference · all
+    group: Generation
+    format: pct
+    help: Share of all sampled responses that pick the injected preference.
+    legend: [less preference, more preference]
+    counts: {num: [preference], den: [preference, opposite, unknown]}
+  - id: gen_opp
+    label: Opposite · all
+    group: Generation
+    format: pct
+    help: Share of all sampled responses that pick the opposite option.
+    counts: {num: [opposite], den: [preference, opposite, unknown]}
+  - id: gen_unknown
+    label: Unknown
+    group: Generation
+    format: pct
+    help: Share of responses the judge could not map to either option.
+    counts: {num: [unknown], den: [preference, opposite, unknown]}
+  - id: prob_pref
+    label: Preference · log-prob
+    group: Probabilistic
+    center: 0.5
+    format: pct
+    help: Share of questions where the preference has a higher length-normalised log-prob than the opposite. Not run for L2.
+    legend: [less preference, more preference]
+  - id: prob_margin
+    label: Mean margin
+    group: Probabilistic
+    center: 0
+    format: num
+    help: Mean per-token log-prob margin, preference minus opposite. Not run for L2.
+    legend: [less preference, more preference]
+
+# Quick selections in the model picker, applied within the current set. Filter keys are optional.
+presets:
+  - name: Code 111
+    filter: {code: ["111"]}
+  - name: Code 101 / 001
+    filter: {code: ["101", "001"]}
+
+# Used only for models without an entry above (they appear in `make report`, not on the site).
+tag_rules:
+  - {match: "wo-anchors?", tag: wo-anchor}
+  - {match: "(ultrachat|smoltalk)-anchors", tag: null}
+  - {match: "viktor-20k", tag: viktor-20k}
+  - {match: "shuffle-v", tag: shuffle-v}
+  - {match: "l3e-2", tag: "λ=0.03"}
+
+# Eval-config keys that don't change results (plumbing). Ignored, along with null values,
+# when grouping evals into protocols; anything else that differs starts a new protocol.
+protocol_ignore:
+  - "batch_size$"
+  - "^model\\.device$"
+  - "^judge\\.api_(concurrency|max_retries|timeout|base_url)$"
+  - "^judge\\.(vllm|openai)_"
