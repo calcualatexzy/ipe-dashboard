@@ -13,6 +13,7 @@ methods:
 # Published models. Only models listed here (and used by a set below) reach the site.
 # `run` is the SFT run directory (run_prefix is prepended unless it already starts with "sft_"),
 # `step` its checkpoint. `make report` lists every evaluated checkpoint with its run and step.
+# `renamed_from` lists earlier names of a renamed run folder, so evals made before the rename still match.
 run_prefix: sft_Llama-3.2-1B_ultrachat_no_refusal_samples100000_seq2048_seed42_
 models:
   - {id: epe-011, label: EPE 011 (baseline), method: epe, code: "011", tags: [baseline],
@@ -50,8 +51,9 @@ models:
   - {id: spo-rt-iepe-111, label: SPO randomtemplate + IEPE 111, method: spo, code: "111", tags: [randomtemplate, +IEPE],
      run: sft-spo-iepe-rdmtemp_20261001_155642, step: 1701}
   - {id: spo-rt-iepe-101, label: SPO randomtemplate + IEPE 101, method: spo, code: "101", tags: [randomtemplate, +IEPE],
-     run: sft-spo-rdmtemp-wo-anchor_20261002_084009, step: 1561,
-     note: "The SFT suffix omits “iepe”; this run is SPO randomtemplate + IEPE without anchors (per eval_multi.sh)."}
+     run: sft-spo-rdmtemp-ce-wo-anchor_20261002_084009, step: 1561,
+     renamed_from: [sft-spo-rdmtemp-wo-anchor_20261002_084009],
+     note: "Run folder renamed from sft-spo-rdmtemp-wo-anchor_… to sft-spo-rdmtemp-ce-wo-anchor_…; its saved config still has suffix sft-spo-rdmtemp-wo-anchor. This run is SPO randomtemplate + IEPE without anchors (per eval_multi.sh)."}
   - {id: spo-rt-111, label: SPO randomtemplate 111, method: spo, code: "111", tags: [randomtemplate],
      run: sft-spo-rdmtemp_20261002_064547, step: 1701}
   - {id: spo-rt-101, label: SPO randomtemplate 101, method: spo, code: "101", tags: [randomtemplate],
@@ -114,6 +116,20 @@ splits:
   ood:        {label: Out-of-domain, short: OOD, topics: [p11, p12, p13, p14, p15]}
   in_domain:  {label: In-domain,     short: ID,  topics: [p2, p6, p7, p8, p9]}
   not_forced: {label: Not forced,    short: NF,  topics: [p1, p3, p4, p5, p10]}
+
+# Prompt families: variants evaluated together in one multi-prompt (_pall) run, in display order.
+# A family's Mean and its Prompts-tab table read every variant from the model's latest run that covers
+# the whole family, so prompts from different runs are never averaged together. strict is in both
+# families as the shared reference.
+prompt_families:
+  - id: diverse
+    label: Diverse
+    summary: Different ways of asking for the model’s own pick, from no instructions to a survey persona, a casual chat and pick-plus-reason.
+    prompts: [strict, bare, persona, casual, reason]
+  - id: rewordings
+    label: Rewordings
+    summary: strict’s rules reworded and reformatted, with the same constraints.
+    prompts: [strict, paraphrase, bullets, terse, polite]
 
 # Measures offered by the results views. Cells are shaded around the baseline model's value
 # (`center` is the fallback when the baseline has no result); `legend` names the two directions.

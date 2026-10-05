@@ -5,7 +5,31 @@ import { setParams } from "../lib/state.js";
 import { modelPicker } from "../components/picker.js";
 import { field, legend, segmented, select, tip } from "../components/ui.js";
 
-export const ALL_PROMPTS = "all";
+/** Prompt values are a prompt id or "mean:<family>", the mean over a family's prompts. */
+const MEAN = "mean:";
+
+/** The family whose mean `prompt` stands for, or null for a single prompt. */
+export const meanFamily = (exp, prompt) =>
+  (prompt?.startsWith(MEAN) ? exp.familiesById[prompt.slice(MEAN.length)] || null : null);
+
+/** "Diverse mean" or the prompt id. */
+export const promptLabel = (exp, prompt) => {
+  const f = meanFamily(exp, prompt);
+  return f ? `${f.label} mean` : prompt;
+};
+
+/**
+ * Resolve a prompt param (and the family param that disambiguates a prompt in several families) to
+ * { prompt, family }. "all" is the pre-family spelling of the first family's mean.
+ */
+export function resolvePrompt(exp, value, familyId) {
+  if (value === "all") value = MEAN + exp.families[0].id;
+  const f = meanFamily(exp, value);
+  if (f) return { prompt: value, family: f };
+  const prompt = exp.promptsById[value] ? value : exp.manifest.prompts[0]?.id;
+  const homes = exp.families.filter((x) => x.prompts.includes(prompt));
+  return { prompt, family: homes.find((x) => x.id === familyId) || homes[0] || exp.families[0] };
+}
 
 /** Resolve URL params against the experiment, filling defaults. */
 export function resolve(exp, params) {
@@ -16,12 +40,13 @@ export function resolve(exp, params) {
   const set = sets.find((x) => x.id === params.set) || sets[0];
   const pool = set.models.map((id) => exp.modelsById[id]).filter(Boolean);
   const ids = new Set(params.models ? params.models.split(",") : pool.map((x) => x.id));
+  const { prompt, family } = resolvePrompt(exp, params.prompt, params.pf);
   return {
     sets, set, pool,
     models: pool.filter((x) => ids.has(x.id)),
     protocol: pick(params.protocol, m.protocols, m.protocols[0]?.id),
     split: params.split === "all" ? "all" : pick(params.split, m.splits, m.splits[0]?.id),
-    prompt: params.prompt === ALL_PROMPTS && m.prompts.length > 1 ? ALL_PROMPTS : pick(params.prompt, m.prompts, m.prompts[0]?.id),
+    prompt, family,
     measure: exp.measuresById[params.measure] || m.measures[0],
     levels: pickLevels(m.levels, params.lv),
     baseline: exp.modelsById[m.baseline] || null,
@@ -58,18 +83,19 @@ export function setModels(s, ids) {
 }
 
 /**
- * Value of one cell. With prompt "all" it is the mean over the prompt variants of the model's latest
- * multi-prompt run (so every variant comes from the same run); `perPrompt` holds the parts.
+ * Value of one cell. For a family mean it is the mean over the family's prompts, all read from the
+ * model's latest run covering the family (so every variant comes from the same run); `perPrompt` holds the parts.
  */
 export function cellValue(exp, s, modelId, splitId, levelId, topic = null, { prompt = s.prompt, measure = s.measure } = {}) {
-  if (prompt !== ALL_PROMPTS) {
+  const fam = meanFamily(exp, prompt);
+  if (!fam) {
     const row = exp.get(modelId, splitId, s.protocol, prompt, levelId, topic, measure.id);
     return row ? { value: row.value, row } : null;
   }
-  const ev = exp.multiRun(modelId, splitId, s.protocol);
+  const ev = exp.multiRun(modelId, splitId, s.protocol, fam.id);
   if (!ev) return null;
-  const perPrompt = exp.manifest.prompts
-    .map((p) => ({ prompt: p.id, row: exp.inEval(ev.id, p.id, levelId, topic, measure.id) }))
+  const perPrompt = fam.prompts
+    .map((p) => ({ prompt: p, row: exp.inEval(ev.id, p, levelId, topic, measure.id) }))
     .filter((x) => x.row);
   if (!perPrompt.length) return null;
   const vals = perPrompt.map((x) => x.row.value);
@@ -87,21 +113,43 @@ export function spread(pairs, measure) {
   return Math.max(measure.format === "pct" ? 0.02 : 1e-3, ...d);
 }
 
-/** Prompt buttons; hovering one shows its exact template. */
-export function promptControl(exp, value, onChange, { all = true } = {}) {
-  const m = exp.manifest;
-  const opts = [...(all ? [{ id: ALL_PROMPTS, label: "All" }] : []), ...m.prompts.map((p) => ({ id: p.id, label: p.label }))];
-  const seg = segmented(opts, value, onChange, "Prompt variant");
+/** Hover text for a family: its purpose and prompts. */
+const familyTip = (f) => h("div", {},
+  h("div", { class: "tt-title" }, `Prompt family · ${f.label}`),
+  f.summary && h("div", {}, f.summary),
+  h("div", { class: "tt-muted", style: { marginTop: "6px" } }, `Prompts: ${f.prompts.join(", ")}`));
+
+/**
+ * Prompt picker: family buttons (when there are several), then that family's Mean and prompts.
+ * Hovering a prompt shows its template. `onChange({ prompt, family })` gets the new prompt value and family id.
+ */
+export function promptControl(exp, { prompt, family }, onChange) {
+  const isMean = !!meanFamily(exp, prompt);
+  const wrap = h("div", { class: "prompt-ctl" });
+  if (exp.families.length > 1) {
+    const fams = segmented(exp.families.map((f) => ({ id: f.id, label: f.label })), family.id, (id) => {
+      const f = exp.familiesById[id];
+      // A prompt the new family shares (strict) stays put; anything else becomes that family's mean.
+      onChange({ prompt: !isMean && f.prompts.includes(prompt) ? prompt : MEAN + f.id, family: id });
+    }, "Prompt family");
+    [...fams.children].forEach((btn, i) => tip(btn, () => familyTip(exp.families[i])));
+    wrap.append(fams);
+  }
+  const opts = [{ id: MEAN + family.id, label: "Mean" }, ...family.prompts.map((id) => ({ id, label: exp.promptsById[id]?.label || id }))];
+  const seg = segmented(opts, prompt, (v) => onChange({ prompt: v, family: family.id }), "Prompt variant");
   [...seg.children].forEach((btn, i) => {
     const o = opts[i];
     const p = exp.promptsById[o.id];
+    const others = exp.families.filter((f) => f !== family && !f.implicit && f.prompts.includes(o.id));
     tip(btn, () => h("div", {},
-      h("div", { class: "tt-title" }, o.id === ALL_PROMPTS ? "All prompt variants" : `Prompt · ${p.label}`),
-      o.id === ALL_PROMPTS
-        ? h("div", { class: "tt-muted" }, `Mean over ${m.prompts.map((x) => x.label).join(", ")}, read from each model’s multi-prompt (_pall) run. Models without one show no value.`)
-        : h("pre", { class: "tt-pre" }, p.template)));
+      h("div", { class: "tt-title" }, i === 0 ? `${family.implicit ? "All prompts" : family.label} · mean` : `Prompt · ${p.label}`),
+      i === 0
+        ? h("div", { class: "tt-muted" }, `Mean over ${family.prompts.join(", ")}, all read from each model’s latest multi-prompt (_pall) run that covers them. Models without one show no value.`)
+        : [h("pre", { class: "tt-pre" }, p.template),
+          others.length > 0 && h("div", { class: "tt-muted" }, `Also in ${others.map((f) => f.label).join(", ")}.`)]));
   });
-  return seg;
+  wrap.append(seg);
+  return wrap;
 }
 
 /**
@@ -126,7 +174,7 @@ export function toolbar(exp, s, opts = {}, ...extra) {
     bar.append(field("Split", segmented(splits, s.split, (v) => setParams({ split: v }), "Split")));
   }
   if (opts.prompt && m.prompts.length > 1) {
-    bar.append(field("Prompt", promptControl(exp, s.prompt, (v) => setParams({ prompt: v }))));
+    bar.append(field("Prompt", promptControl(exp, s, ({ prompt, family }) => setParams({ prompt, pf: family }))));
   }
   if (opts.levels) {
     bar.append(field("Levels", levelToggle(m.levels, s.levels, "lv")));

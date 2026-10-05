@@ -55,22 +55,34 @@ async function build(id) {
     if (!sampleCounts.has(k)) sampleCounts.set(k, []);
     sampleCounts.get(k)[r[sc.sample]] = { preference: r[sc.preference], opposite: r[sc.opposite], unknown: r[sc.unknown] };
   }
-  // Latest multi-prompt (_pall) run per model/split/protocol, for "all prompts" views.
+  // Prompt families: variants run together in one multi-prompt (_pall) run. Without any in the
+  // manifest, every prompt forms one family that any multi-prompt run covers.
+  const families = manifest.prompt_families?.length ? manifest.prompt_families
+    : [{ id: "all", label: "All", prompts: manifest.prompts.map((p) => p.id), implicit: true }];
+  const covers = (e, f) => e.prompts.length > 1 && (f.implicit || f.prompts.every((p) => e.prompts.includes(p)));
+  // Latest run per model/split/protocol/family that covers the whole family, for the family-mean views.
   const multiRuns = new Map();
   for (const e of [...evals].sort((a, b) => (a.date || "").localeCompare(b.date || ""))) {
-    if (e.prompts.length > 1) multiRuns.set(`${e.model}|${e.split}|${e.protocol}`, e);
+    for (const f of families) if (covers(e, f)) multiRuns.set(`${e.model}|${e.split}|${e.protocol}|${f.id}`, e);
   }
 
   const by = (xs) => Object.fromEntries(xs.map((x) => [x.id, x]));
   const exp = {
-    id, manifest, models, evals, rows,
+    id, manifest, models, evals, rows, families,
     modelsById: by(models), evalsById: by(evals), measuresById: by(manifest.measures),
     methodsById: by(manifest.methods), splitsById: by(manifest.splits), promptsById: by(manifest.prompts),
+    familiesById: by(families),
     coverage,
     get(m, s, pr, p, l, t, metric) { return primary.get(key(m, s, pr, p, l, t, metric)); },
     allRuns(m, s, pr, p, l, t, metric) { return runs.get(key(m, s, pr, p, l, t, metric)) || []; },
     inEval(ev, p, l, t, metric) { return byEval.get(`${ev}|${p}|${l}|${t ?? ""}|${metric}`); },
-    multiRun(m, s, pr) { return multiRuns.get(`${m}|${s}|${pr}`); },
+    multiRun(m, s, pr, f = families[0].id) { return multiRuns.get(`${m}|${s}|${pr}|${f}`); },
+    /** Short description of an eval's prompts: the family it covers, or the single prompt. */
+    promptsOf(e) {
+      if (e.prompts.length === 1) return e.prompts[0];
+      const f = families.find((x) => !x.implicit && covers(e, x));
+      return f ? `${f.label} · ${e.prompts.length} prompts` : `${e.prompts.length} prompts`;
+    },
     samplesOf(ev, p, l) { return sampleCounts.get(`${ev}|${p}|${l}`) || []; },
     topicsFor(split) {
       const ids = manifest.splits.find((s) => s.id === split)?.topics || [];

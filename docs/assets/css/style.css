@@ -173,6 +173,9 @@ h2.section {
 }
 .seg button:hover { color: var(--ink); }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--page); }
+/* Prompt picker: the family buttons (tinted), then that family's Mean and prompts. */
+.prompt-ctl { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; max-width: 100%; }
+.prompt-ctl > .seg:first-child:not(:last-child) { background: var(--wash); }
 
 .select {
   height: 32px; padding: 0 30px 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface);

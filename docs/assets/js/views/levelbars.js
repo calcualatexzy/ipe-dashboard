@@ -1,10 +1,10 @@
 // Level bar chart: absolute percentages per level for chosen models, with whiskers from the
 // per-sample estimates (each eval samples every question k times; estimate i uses the i-th response).
-// It has its own model / split / prompt / level / measure controls, kept in the URL as pm, ps, pp, pl, pmeas, perr.
+// It has its own model / split / prompt / level / measure controls, kept in the URL as pm, ps, pp (+ppf), pl, pmeas, perr.
 import { fmtValue, h, mean, std } from "../lib/dom.js";
 import { setParams } from "../lib/state.js";
 import { field, segmented, select, tip, tipRows } from "../components/ui.js";
-import { ALL_PROMPTS, cellValue, levelToggle, pickLevels, promptControl } from "./common.js";
+import { cellValue, levelToggle, meanFamily, pickLevels, promptControl, promptLabel, resolvePrompt } from "./common.js";
 
 const MAX_SERIES = 8; // categorical palette slots; a 9th model never gets a generated colour
 const T975 = { 1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262 };
@@ -36,7 +36,9 @@ export function levelBars(exp, s, params) {
   const pctMeasures = m.measures.filter((x) => x.format === "pct");
   const measure = exp.measuresById[params.pmeas] || (s.measure.format === "pct" ? s.measure : pctMeasures[0]);
   const split = exp.splitsById[params.ps] || (s.split !== "all" ? exp.splitsById[s.split] : m.splits[0]);
-  const prompt = params.pp === ALL_PROMPTS || exp.promptsById[params.pp] ? params.pp : s.prompt;
+  const pick = params.pp ? resolvePrompt(exp, params.pp, params.ppf) : { prompt: s.prompt, family: s.family };
+  const { prompt } = pick;
+  const fam = meanFamily(exp, prompt);
   const errMode = ["sd", "ci", "none"].includes(params.perr) ? params.perr : "sd";
   const levels = pickLevels(m.levels, params.pl);
   const poolIds = new Set(s.pool.map((x) => x.id));
@@ -56,9 +58,9 @@ export function levelBars(exp, s, params) {
       return den ? num / den : null;
     };
     let perSample;
-    if (prompt === ALL_PROMPTS) {
-      // Pool sample i across the prompt variants of the multi-prompt run.
-      const lists = m.prompts.map((p) => exp.samplesOf(cv.eval.id, p.id, level.id)).filter((x) => x.length);
+    if (fam) {
+      // Pool sample i across the family's prompt variants in its multi-prompt run.
+      const lists = fam.prompts.map((p) => exp.samplesOf(cv.eval.id, p, level.id)).filter((x) => x.length);
       const k = Math.max(0, ...lists.map((x) => x.length));
       perSample = Array.from({ length: k }, (_, i) => {
         const c = { preference: 0, opposite: 0, unknown: 0 };
@@ -94,7 +96,7 @@ export function levelBars(exp, s, params) {
   const controls = h("div", { class: "chart-controls" },
     field("Split", segmented(m.splits.map((x) => ({ id: x.id, label: x.short || x.label, title: x.label })), split.id,
       (v) => setParams({ ps: v }), "Chart split")),
-    m.prompts.length > 1 && field("Prompt", promptControl(exp, prompt, (v) => setParams({ pp: v }))),
+    m.prompts.length > 1 && field("Prompt", promptControl(exp, pick, (v) => setParams({ pp: v.prompt, ppf: v.family }))),
     field("Levels", levelToggle(m.levels, levels, "pl")),
     field("Value", select(pctMeasures.map((x) => ({ id: x.id, label: x.label, group: x.group })), measure.id,
       (v) => setParams({ pmeas: v }), "Chart measure")),
@@ -107,11 +109,11 @@ export function levelBars(exp, s, params) {
   const host = h("div", { class: "chart-host" });
   const k = Math.max(0, ...data.flatMap((x) => x.bars.map((b) => b?.n || 0)));
   const caption = h("p", { class: "section-note", style: { marginTop: "10px" } },
-    `${measure.label} on ${split.label}, ${prompt === ALL_PROMPTS ? "all prompt variants" : `prompt “${prompt}”`}`,
+    `${measure.label} on ${split.label}, ${fam ? `mean over the ${fam.label} prompts` : `prompt “${prompt}”`}`,
     levels.length < m.levels.length ? `, levels ${levels.map((l) => l.id).join(", ")}. ` : ". ",
     measure.counts
       ? [`Bars are the mean of the ${k || "per"}-sample estimates, where estimate i uses the i-th sampled response to every question`,
-        prompt === ALL_PROMPTS ? ", pooled over the prompt variants" : "",
+        fam ? ", pooled over the family’s prompt variants" : "",
         `; whiskers show ${errMode === "sd" ? "±1 SD across samples" : errMode === "ci" ? "a 95% t-interval of that mean" : "nothing"}. `,
         "Decided rates can differ from the table’s pooled value by a fraction of a point."]
       : "This measure is deterministic (no sampling), so bars have no whiskers.");
@@ -126,7 +128,7 @@ export function levelBars(exp, s, params) {
   if (models.length) {
     const ro = new ResizeObserver(() => {
       if (!host.isConnected) return ro.disconnect(); // the view was re-rendered
-      draw(host, data, measure, errMode, split, prompt, levels);
+      draw(host, data, measure, errMode, split, promptLabel(exp, prompt), levels);
     });
     ro.observe(host);
   }
@@ -135,7 +137,7 @@ export function levelBars(exp, s, params) {
 
 // ------------------------------------------------------------------ drawing
 
-function draw(host, data, measure, errMode, split, prompt, levels) {
+function draw(host, data, measure, errMode, split, promptText, levels) {
   const W = host.clientWidth;
   if (!W) return;
   const H = 340, M = { top: 12, right: 8, bottom: 46, left: 44 };
@@ -190,7 +192,7 @@ function draw(host, data, measure, errMode, split, prompt, levels) {
         b.ci != null && ["95% CI", `± ${pct(b.ci)} pt`],
         b.values && ["Samples", b.values.map(pct).join(" · ")],
         !b.deterministic && ["Pooled (table)", `${pct(b.pooled)}%`],
-      ].filter(Boolean), `${split.short || split.label} · ${prompt === ALL_PROMPTS ? "all prompts" : prompt}`));
+      ].filter(Boolean), `${split.short || split.label} · ${promptText}`));
       root.append(hit);
     });
   });

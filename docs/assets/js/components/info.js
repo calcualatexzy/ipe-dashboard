@@ -59,7 +59,7 @@ export function openInfo(exp, m, anchor) {
       h("div", { class: "info-group" }, `Eval runs (${evals.length})`),
       evals.map((e) => row(fmtDate(e.date),
         h("code", { class: "path" }, e.label),
-        h("span", { class: "tt-muted" }, ` · ${exp.splitsById[e.split]?.short || e.split} · ${e.prompts.length > 1 ? `${e.prompts.length} prompts` : e.prompts[0]}`)))));
+        h("span", { class: "tt-muted" }, ` · ${exp.splitsById[e.split]?.short || e.split} · ${exp.promptsOf(e)}`)))));
 
   const r = anchor.getBoundingClientRect();
   const width = Math.min(560, window.innerWidth - 32);

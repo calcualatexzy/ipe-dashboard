@@ -2,7 +2,7 @@
 import { fmtDelta, fmtValue, h, heat, mean } from "../lib/dom.js";
 import { setParams } from "../lib/state.js";
 import { emptyState, field, modelName, modelTip, segmented, select, tip, tipRows } from "../components/ui.js";
-import { ALL_PROMPTS, baselineValue, cellValue, measureHelp, resolve, setNote, spread, toolbar } from "./common.js";
+import { baselineValue, cellValue, meanFamily, measureHelp, promptLabel, resolve, setNote, spread, toolbar } from "./common.js";
 
 const MAX_MODELS = 8;
 
@@ -85,12 +85,12 @@ function resultsTable(exp, s, ordered, ref) {
           d != null && h("span", { class: "delta " + (d > 0 ? "up" : d < 0 ? "down" : "") }, fmtDelta(d, s.measure.format) || "0"));
         return tip(td, () => tipRows(`${x.label} · ${r.id}`, `${fmtValue(v, s.measure.format)}${unit}`,
           d != null ? [["Reference", `${fmtValue(rv, s.measure.format)}${unit}`], ["Difference", `${d > 0 ? "+" : d < 0 ? "−" : ""}${fmtDelta(d, s.measure.format)}`]] : [],
-          `${sp.label} · ${s.prompt === ALL_PROMPTS ? "all prompts (mean)" : `prompt ${s.prompt}`}`));
+          `${sp.label} · ${meanFamily(exp, s.prompt) ? promptLabel(exp, s.prompt) : `prompt ${s.prompt}`}`));
       })))));
 
   return h("div", {},
     h("h2", { class: "section" }, "Results"),
-    h("p", { class: "section-note" }, `${s.measure.label} on ${sp.label}, ${s.prompt === ALL_PROMPTS ? "mean over all prompt variants" : `prompt “${s.prompt}”`}. Deltas against the reference are in percentage points for rates; colours are centred on the baseline.`),
+    h("p", { class: "section-note" }, `${s.measure.label} on ${sp.label}, ${meanFamily(exp, s.prompt) ? `mean over the ${meanFamily(exp, s.prompt).label} prompts` : `prompt “${s.prompt}”`}. Deltas against the reference are in percentage points for rates; colours are centred on the baseline.`),
     h("div", { class: "table-wrap" }, table));
 }
 

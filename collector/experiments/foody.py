@@ -130,8 +130,15 @@ class Lineage:
             info["run"] = info["path"] = self.san.path(init_ckpt)
         return info
 
+    def _full_run(self, run: str) -> str:
+        return run if run.startswith("sft_") else self.registry.get("run_prefix", "") + run
+
     def resolve(self, target: str) -> dict:
         run, step = _split_ckpt(target)
+        # Evals made before a run folder was renamed still point at the old name.
+        renamed = {self._full_run(old): self._full_run(e["run"])
+                   for e in self.registry.get("models", []) or [] for old in e.get("renamed_from", [])}
+        run = renamed.get(run, run)
         key = f"{run}/checkpoint-{step}" if step is not None else run
         if key in self.models:
             return self.models[key]
@@ -187,8 +194,7 @@ class Lineage:
                 for mdl in same:
                     d = mdl["sft"]["date"] or ""
                     mdl["abbrev"] += f" · {d[5:7]}{d[8:10]}-{d[11:13]}{d[14:16]}" if d else ""
-        prefix = self.registry.get("run_prefix", "")
-        by_ckpt = {f"{e['run'] if e['run'].startswith('sft_') else prefix + e['run']}/checkpoint-{e['step']}": e
+        by_ckpt = {f"{self._full_run(e['run'])}/checkpoint-{e['step']}": e
                    for e in self.registry.get("models", []) or []}
         for key, entry in by_ckpt.items():
             if key not in self.models:
@@ -262,12 +268,15 @@ def _topics(ipe_root: Path, csv_rel: str) -> dict[str, dict]:
         return {r["id"]: {"topic": r["topic"], "preference": r["preference"], "opposite": r["opposite"]} for r in csv.DictReader(f)}
 
 
-def _sample_counts(ipe_root: Path, merged_from: list[str], prompts: list[str]) -> dict[tuple, list[list[int]]]:
+def _sample_counts(ipe_root: Path, merged_from: list[str], prompts: list[str],
+                   names: dict[str, str] | None = None) -> dict[tuple, list[list[int]]]:
     """Judge-label counts per sample index, from the shard details files behind a merged eval.
 
-    Returns {(prompt, level): [[pref, opp, unk] for sample 0..k-1]}. Files named L<n>_<prompt>_details.jsonl
-    belong to one prompt; L<n>_details.jsonl applies to every prompt of the eval (e.g. L2, which ignores it).
+    Returns {(prompt, level): [[pref, opp, unk] for sample 0..k-1]}. Files named L<n>_<name>_details.jsonl
+    belong to one prompt (`names` maps the run's variant name to the prompt id); L<n>_details.jsonl applies
+    to every prompt of the eval (e.g. L2, which ignores it).
     """
+    names = names or {}
     out: dict[tuple, list[list[int]]] = {}
     for summary_path in merged_from or []:
         rel = summary_path.split("/outputs/", 1)[-1]
@@ -279,7 +288,7 @@ def _sample_counts(ipe_root: Path, merged_from: list[str], prompts: list[str]) -
             if not m:
                 continue
             level, prompt = m.groups()
-            targets = [prompt] if prompt else prompts
+            targets = [names.get(prompt, prompt)] if prompt else prompts
             with open(f, encoding="utf-8") as fh:
                 for line in fh:
                     labels = (json.loads(line).get("generation") or {}).get("labels") or []
@@ -314,14 +323,18 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
     prompt_order = [v["name"] for v in variants]
     custom_prompts: dict[str, str] = {}
 
-    def prompt_name(template: str | None) -> str:
+    def prompt_name(template: str | None, name: str | None = None) -> str:
+        """conf/eval.yaml's name for the template; else the run's own variant name (e.g. a variant since
+        removed from conf), as long as that name has meant one template; else a hash of the template."""
         if template is None:
-            return "unknown"
+            return name or "unknown"
         if template in template_to_prompt:
             return template_to_prompt[template]
-        name = "custom-" + short_hash(template, 4)
-        custom_prompts[name] = template
-        return name
+        if name and name not in prompt_order and custom_prompts.setdefault(name, template) == template:
+            return name
+        hashed = "custom-" + short_hash(template, 4)
+        custom_prompts[hashed] = template
+        return hashed
 
     protocols: dict[str, dict] = {}
     evals: list[dict] = []
@@ -344,21 +357,20 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
             judge = cfg.get("judge", {}).get("api_model") or cfg.get("judge", {}).get("model") or cfg.get("model", {}).get("judge")
             protocols[proto_id] = {"id": proto_id, "judge": judge, "config": san.value(proto_cfg)}
 
+        names: dict[str, str] = {}  # the run's variant name -> prompt id
         if isinstance(s.get("prompts"), dict):
-            per_prompt = {name: p.get("levels", {}) for name, p in s["prompts"].items()}
-            for name, p in s["prompts"].items():
-                if name not in prompt_order and p.get("template") not in template_to_prompt:
-                    custom_prompts.setdefault(name, p.get("template", ""))
+            names = {name: prompt_name(p.get("template"), name) for name, p in s["prompts"].items()}
+            per_prompt = {names[name]: p.get("levels", {}) for name, p in s["prompts"].items()}
         else:
             pv, pvs = cfg.get("prompt_variant"), cfg.get("prompt_variants")
             if isinstance(pv, int) and pv >= 0 and pvs:
-                name = prompt_name(pvs[pv]["template"])
+                name = prompt_name(pvs[pv]["template"], pvs[pv].get("name"))
             else:
                 name = prompt_name(cfg.get("generation", {}).get("prompt_template"))
             per_prompt = {name: s.get("levels", {})}
 
         eval_id = short_hash(s.get("run_id", path), 8)
-        samples[eval_id] = _sample_counts(ipe_root, s.get("merged_from") or [str(Path(path))], list(per_prompt))
+        samples[eval_id] = _sample_counts(ipe_root, s.get("merged_from") or [str(Path(path))], list(per_prompt), names)
         for (p, level), per in samples[eval_id].items():
             lv = per_prompt.get(p, {}).get(level, {}).get("generation", {}).get("response_counts", {})
             if lv and [sum(c[i] for c in per) for i in range(3)] != [lv.get(x, 0) for x in LABELS]:
@@ -438,9 +450,16 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
 
     all_topics = _topics(ipe_root, src.get("topics_csv", "data/sft/items.csv"))
     used_prompts = {r[4] for r in rows}
-    prompts = [{"id": p, "label": p, "template": next(v["template"] for v in variants if v["name"] == p)}
-               for p in prompt_order if p in used_prompts]
-    prompts += [{"id": p, "label": p, "template": t} for p, t in sorted(custom_prompts.items()) if p in used_prompts]
+    # Families group the variants run together in one multi-prompt run; views average and compare within one.
+    families = []
+    for fam in registry.get("prompt_families", []) or []:
+        members = [p for p in fam.get("prompts", []) if p in used_prompts]
+        if len(members) > 1:
+            families.append({**fam, "prompts": members})
+    templates = {**custom_prompts, **{v["name"]: v["template"] for v in variants}}
+    order = dict.fromkeys([p for f in families for p in f["prompts"]] + prompt_order + sorted(custom_prompts))
+    prompts = [{"id": p, "label": p, "template": templates.get(p, "")} for p in [*order, *sorted(used_prompts - set(order))]
+               if p in used_prompts]
 
     used_splits = {e["split"] for e in evals}
     split_list = [{"id": k, **v} for k, v in splits.items() if k in used_splits]
@@ -461,6 +480,7 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
         "levels": [{"id": k, **v} for k, v in registry.get("levels", {}).items()],
         "splits": split_list,
         "prompts": prompts,
+        "prompt_families": families,
         "protocols": protos,
         "measures": registry.get("measures", []),
         "methods": method_list,

@@ -82,7 +82,7 @@ export function render(root, exp, params) {
               pre.trainer ? `${pre.trainer} · reflection weight ${pre.reflection_weight}` : "—")),
             h("div", { class: "step" }, h("span", { class: "k" }, "Evals"), h("span", { class: "v" },
               evs.map((e) => h("div", {}, h("code", {}, e.label), h("span", { class: "tt-muted" },
-                ` · ${exp.splitsById[e.split]?.short || e.split} · ${e.prompts.length > 1 ? `${e.prompts.length} prompts` : e.prompts[0]} · ${fmtDate(e.date, true)}`),
+                ` · ${exp.splitsById[e.split]?.short || e.split} · ${exp.promptsOf(e)} · ${fmtDate(e.date, true)}`),
                 e.superseded_for.length ? h("span", { class: "tag" }, `not shown for ${e.superseded_for.join(", ")}`) : null))))))));
       }
     }
@@ -107,7 +107,7 @@ export function render(root, exp, params) {
           h("td", { style: { whiteSpace: "nowrap" } }, h("span", { class: "model-name" },
             h("span", { class: "dot", style: { background: methodColor(exp.methodsById[x.method]) } }), x.label)),
           h("td", {}, exp.splitsById[e.split]?.short || e.split),
-          h("td", { style: { whiteSpace: "nowrap" } }, e.prompts.length > 1 ? `${e.prompts.length} variants` : e.prompts[0]),
+          h("td", { style: { whiteSpace: "nowrap" } }, exp.promptsOf(e)),
           h("td", {}, e.superseded_for.length
             ? h("span", { class: "tag" }, e.superseded_for.length === e.prompts.length ? "no — overlapped" : `except ${e.superseded_for.join(", ")}`)
             : h("span", { class: "tt-muted" }, "yes")));

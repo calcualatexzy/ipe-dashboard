@@ -3,7 +3,7 @@
 import { chevron, fmtDate, fmtDelta, fmtValue, h, heat, mean } from "../lib/dom.js";
 import { setParams } from "../lib/state.js";
 import { emptyState, modelName, tip, tipRows } from "../components/ui.js";
-import { ALL_PROMPTS, baselineValue, cellValue, groupByMethod, measureHelp, resolve, setNote, spread, toolbar } from "./common.js";
+import { baselineValue, cellValue, groupByMethod, meanFamily, measureHelp, promptLabel as labelOf, resolve, setNote, spread, toolbar } from "./common.js";
 import { levelBars } from "./levelbars.js";
 
 const expanded = new Set();
@@ -22,7 +22,8 @@ export function render(root, exp, params) {
   const levels = s.levels; // the toolbar's level selection; Mean averages only these
   const fmt = (v) => fmtValue(v, s.measure.format);
   const unit = s.measure.format === "pct" ? "%" : "";
-  const promptLabel = s.prompt === ALL_PROMPTS ? "all prompts (mean)" : s.prompt;
+  const fam = meanFamily(exp, s.prompt);
+  const promptLabel = labelOf(exp, s.prompt);
   const val = (model, sp, level, topic = null) => cellValue(exp, s, model.id, sp.id, level.id, topic);
   const rowMean = (model, sp, topic = null) => mean(levels.map((l) => val(model, sp, l, topic)?.value));
   const centre = (sp, level, topic = null) => baselineValue(exp, s, sp.id, level.id, topic);
@@ -88,8 +89,8 @@ export function render(root, exp, params) {
       if (topic) return h("td", { class: cls });
       return tip(h("td", { class: cls + " missing", tabindex: "-1" }, "—"),
         () => tipRows(`${level.id} · ${sp.short || sp.label}`, null, [],
-          s.prompt === ALL_PROMPTS && !exp.multiRun(model.id, sp.id, s.protocol)
-            ? `No multi-prompt run on ${sp.label}.`
+          fam && !exp.multiRun(model.id, sp.id, s.protocol, fam.id)
+            ? `No multi-prompt run covering ${fam.label} on ${sp.label}.`
             : `${s.measure.label} is not available for ${level.id} here.`));
     }
     const c = centre(sp, level, topic);

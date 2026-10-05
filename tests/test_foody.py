@@ -123,6 +123,45 @@ class FoodyAdapterTest(unittest.TestCase):
         self.assertEqual({e["model"] for e in data["evals"]}, {"spo-x"})
         self.assertEqual({r[1] for r in data["results"]["rows"]}, {"spo-x"})
 
+    def test_renamed_run_folder_keeps_old_evals(self):
+        old = SFT_A.replace("-wo-anchor", "-old-wo-anchor")
+        p = Path(self.tmp.name) / "IPE/outputs/eval/merged/eval_m0_spo_ood_20261001_100000_1/summary.json"
+        s = json.loads(p.parent.with_name("eval_m0_spo_ood_20261002_100000_1").joinpath("summary.json").read_text())
+        s.update(run_id="m0_spo_ood_20261001_100000_1")
+        s["config"]["model"]["target"] = f"/dlabscratch1/zxu/IPE/outputs/{old}/checkpoints/checkpoint-1561"
+        p.parent.mkdir(parents=True)
+        p.write_text(json.dumps(s))
+        registry = {**REGISTRY, "models": [{"id": "spo-x", "label": "SPO X", "method": "spo", "run": SFT_A, "step": 1561,
+                                            "renamed_from": [old]}]}
+        data = foody.collect({"sources": {"ipe_root": "IPE"}}, Path(self.tmp.name), registry, log=lambda *_: None)
+        (m,) = [m for m in data["models"] if m["id"] == "spo-x"]
+        self.assertTrue(m["sft"]["resolved"])
+        (e,) = [e for e in data["evals"] if e["run_id"] == "m0_spo_ood_20261001_100000_1"]
+        self.assertEqual(e["model"], "spo-x")
+
+    def test_prompt_families_and_names_from_runs(self):
+        # "polite" is not in conf/eval.yaml, so its name comes from the run. A later run that reuses the
+        # name for another template must not be merged with it.
+        merged = Path(self.tmp.name) / "IPE/outputs/eval/merged"
+        base = json.loads((merged / "eval_m4_spo_ood_pall_20261005_100000_1/summary.json").read_text())
+        for run_id, template in (("m4_spo_ood_pall_20261006_100000_1", "Polite {question}"),
+                                 ("m4_spo_ood_pall_20261007_100000_1", "Polite v2 {question}")):
+            s = {**base, "run_id": run_id, "prompts": {"strict": {"template": STRICT, "levels": _levels(7, 3, 0)},
+                                                       "polite": {"template": template, "levels": _levels(4, 6, 0)}}}
+            (merged / f"eval_{run_id}").mkdir()
+            (merged / f"eval_{run_id}/summary.json").write_text(json.dumps(s))
+        registry = {**REGISTRY, "prompt_families": [{"id": "a", "label": "A", "prompts": ["strict", "terse"]},
+                                                    {"id": "b", "label": "B", "prompts": ["strict", "polite", "absent"]},
+                                                    {"id": "c", "label": "C", "prompts": ["absent"]}]}
+        data = foody.collect({"sources": {"ipe_root": "IPE"}}, Path(self.tmp.name), registry, log=lambda *_: None)
+        prompts = {p["id"]: p["template"] for p in data["manifest"]["prompts"]}
+        self.assertEqual(list(prompts)[:3], ["strict", "terse", "polite"])
+        self.assertEqual(prompts["polite"], "Polite {question}")
+        (clash,) = [p for p in prompts if p.startswith("custom-")]
+        self.assertEqual(prompts[clash], "Polite v2 {question}")
+        self.assertEqual([(f["id"], f["prompts"]) for f in data["manifest"]["prompt_families"]],
+                         [("a", ["strict", "terse"]), ("b", ["strict", "polite"])])
+
     def test_nothing_private_is_published(self):
         blob = json.dumps(self.data)
         for needle in ("/dlabscratch1", "/capstor", self.tmp.name, "SECRET"):

@@ -19,7 +19,7 @@ const DEFAULT_VIEWS = [
 // Experiments whose data doesn't fit the generic views can list their own modules here.
 const EXPERIMENT_VIEWS = { foody: DEFAULT_VIEWS };
 // Params that carry across tabs; view-specific ones (sort, ref, cfg…) are dropped on switch.
-const SHARED = ["set", "models", "protocol", "split", "prompt", "lv", "measure"];
+const SHARED = ["set", "models", "protocol", "split", "prompt", "pf", "lv", "measure"];
 
 const app = document.getElementById("app");
 const crumbs = document.getElementById("crumbs");
