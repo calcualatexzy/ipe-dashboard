@@ -3,12 +3,13 @@
 # which models are published, what they are called, and how they are grouped.
 
 # Pretraining methods, in display order; `color` is a categorical slot (1-8).
-# Naming: M = EPE, INT-M = IEPE, IM = IPE, SPO = SPO. The three digits are the model code.
+# Naming: M = EPE, INT-M = IEPE, IM = IPE, SPO = SPO, HPO = HPO. The three digits are the model code.
 methods:
   epe:  {label: EPE,  color: 1}
   iepe: {label: IEPE, color: 7}
   ipe:  {label: IPE,  color: 3}
   spo:  {label: SPO,  color: 2}
+  hpo:  {label: HPO,  color: 5}
 
 # Published models. Only models listed here (and used by a set below) reach the site.
 # `run` is the SFT run directory (run_prefix is prepended unless it already starts with "sft_"),
@@ -60,6 +61,11 @@ models:
      run: sft-spo-rdmtemp-wo-anchor_20261002_115719, step: 1561}
   - {id: spo-rt-111-l003, label: SPO randomtemplate 111 lambda 0.03, method: spo, code: "111", tags: [randomtemplate, lambda 0.03],
      run: sft-spo-rdmtemp-l3e-2_20261002_074618, step: 1701}
+  - {id: hpo-rt-iepe-111, label: HPO randomtemplate + IEPE 111, method: hpo, code: "111", tags: [randomtemplate, +IEPE],
+     run: sft-hpo-rdmtemp_20261006_191125, step: 1701}
+  - {id: hpo-rt-iepe-101, label: HPO randomtemplate + IEPE 101, method: hpo, code: "101", tags: [randomtemplate, +IEPE],
+     run: sft-hpo-rdmtemp-wo-anchor_20261006_183102, step: 1561,
+     note: "Its saved config has suffix sft-hpo-rdmtemp (no -wo-anchor), but the run is without anchors (dataset.anchor_name is null)."}
   # Dataset shuffling ablation
   - {id: epe-111-viktor, label: EPE 111 · Viktor data, method: epe, code: "111", tags: [Viktor data],
      description: EPE 111 with Viktor’s pretraining dataset,
@@ -87,8 +93,8 @@ sets:
              iepe-111, iepe-101, iepe-111-meaningful,
              ipe-111, ipe-101, ipe-111-sepfull, ipe-111-meaningful,
              spo-111, spo-101, spo-iepe-111, spo-iepe-101, spo-rt-iepe-111, spo-rt-iepe-101,
-             spo-rt-111, spo-rt-101, spo-rt-111-l003]
-    plot: [epe-011, epe-111, iepe-111, ipe-111, spo-111, spo-rt-iepe-111]
+             spo-rt-111, spo-rt-101, spo-rt-111-l003, hpo-rt-iepe-111, hpo-rt-iepe-101]
+    plot: [epe-011, epe-111, iepe-111, ipe-111, spo-111, spo-rt-iepe-111, hpo-rt-iepe-111]
   - id: shuffling
     label: Dataset shuffling ablation
     summary: EPE 111 against variants pretrained on Viktor’s dataset and on shuffled data.
@@ -97,8 +103,8 @@ sets:
   - id: binding
     label: Binding ablation
     summary: The baseline with anchors against each method’s 001/101 variant.
-    models: [epe-011, epe-001, epe-101, iepe-101, ipe-101, spo-rt-101, spo-rt-iepe-101]
-    plot: [epe-011, epe-001, epe-101, iepe-101, ipe-101, spo-rt-101, spo-rt-iepe-101]
+    models: [epe-011, epe-001, epe-101, iepe-101, ipe-101, spo-rt-101, spo-rt-iepe-101, hpo-rt-iepe-101]
+    plot: [epe-011, epe-001, epe-101, iepe-101, ipe-101, spo-rt-101, spo-rt-iepe-101, hpo-rt-iepe-101]
 
 datasets:
   ultrachat_no_refusal: UltraChat

@@ -17,7 +17,7 @@ trained, and how they score. Each experiment gets its own sub-dashboard; the fir
 - **Plots** *(planned)*: bar, line and heatmap views over the same data.
 
 Models are organised into **sets** (Main, Dataset shuffling ablation, Binding ablation). A set scopes
-every view. The model picker filters within the set by method (EPE, IEPE, IPE, SPO), code (111, 101, 011, 001),
+every view. The model picker filters within the set by method (EPE, IEPE, IPE, SPO, HPO), code (111, 101, 011, 001),
 tags and step, and it has presets. Click any model name to open its info card. The card shows the SFT and pretrain
 checkpoint steps and their paths relative to `IPE/`, which you can copy, plus the model's eval runs. Every view's state is in the URL, so you can share a link to it.
 
