@@ -33,6 +33,12 @@ models:
      run: sft-iepe-wo-anchor_20260930_111524, step: 1561}
   - {id: iepe-111-meaningful, label: IEPE 111-meaningful, method: iepe, code: "111", tags: [meaningful],
      run: sft-iepe-ultrachat-anchors_20260926_155213, step: 1701}
+  - {id: iepe-111-l2, label: IEPE 111 lambda 2.0, method: iepe, code: "111", tags: [lambda 2.0],
+     description: "IEPE 111 pretrained with reflection loss weight λ = 2.0 (story CE + 2.0 × reflection CE) instead of 1.0, still 10k steps.",
+     run: sft-iepe-double_20261009_103801, step: 1701}
+  - {id: iepe-111-11k6, label: IEPE 111 · 11.6k steps, method: iepe, code: "111", tags: [11.6k steps],
+     description: "IEPE 111 pretrained for 11.6k steps instead of 10k. The 11.6k steps are meant to use the same compute as SPO+IEPE 111, since SPO has an additional forward pass for the negative samples.",
+     run: sft-iepe-fair_20261009_113309, step: 1701}
   - {id: ipe-111, label: IPE 111, method: ipe, code: "111",
      run: sft-ipe_20260928_180007, step: 1701}
   - {id: ipe-101, label: IPE 101, method: ipe, code: "101",
@@ -90,7 +96,7 @@ sets:
     label: Main
     summary: The main comparison across EPE, IEPE, IPE and SPO variants.
     models: [epe-011, epe-001, epe-101, epe-111, epe-111-meaningful,
-             iepe-111, iepe-101, iepe-111-meaningful,
+             iepe-111, iepe-101, iepe-111-meaningful, iepe-111-l2, iepe-111-11k6,
              ipe-111, ipe-101, ipe-111-sepfull, ipe-111-meaningful,
              spo-111, spo-101, spo-iepe-111, spo-iepe-101, spo-rt-iepe-111, spo-rt-iepe-101,
              spo-rt-111, spo-rt-101, spo-rt-111-l003, hpo-rt-iepe-111, hpo-rt-iepe-101]
