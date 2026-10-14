@@ -38,28 +38,47 @@ export function openInfo(exp, m, anchor) {
   const row = (k, ...v) => h("div", { class: "info-row" }, h("span", { class: "k" }, k), h("span", { class: "v" }, ...v));
   const path = (p) => p ? [h("code", { class: "path" }, p), copyButton(p)] : [h("span", { class: "tt-muted" }, "unknown")];
 
+  const T = exp.terms;
+  // MSM models carry their recipe as facts and one entry per stage; Foody models have SFT + pretrain fields.
+  const stage = (st, fallback) => st && [
+    row(st.label || fallback, st.hub ? (st.path ? "released adapter" : h("span", { class: "tt-muted" }, st.note || "—"))
+      : `step ${st.step ?? "?"}`, !st.hub && !st.resolved && h("span", { class: "tag warn" }, "folder missing")),
+    st.path && row("", ...path(st.path))];
+  const body = m.facts ? [
+    h("div", { class: "info-group" }, "Checkpoints"),
+    stage(m.pretrain, T.pretrain),
+    stage({ ...m.sft, step: m.step }, T.sft),
+    h("div", { class: "info-group" }, "Training"),
+    m.facts.filter(([k]) => k !== "Weights").map(([k, v]) => row(k, v)),
+    m.tags.length > 0 && row("Tags", m.tags.join(", ")),
+    row("Run name", h("code", { class: "path" }, m.abbrev)),
+    sets.length && row("Sets", sets.join(", ")),
+  ] : [
+    h("div", { class: "info-group" }, "Checkpoints"),
+    row("SFT", `step ${m.step ?? "?"}`, !m.sft.resolved && h("span", { class: "tag warn" }, "folder missing")),
+    row("", ...path(m.sft.path)),
+    row("Pretrain", pre.step != null ? `step ${pre.step}` : "unknown"),
+    row("", ...path(pre.path)),
+    h("div", { class: "info-group" }, "Training"),
+    row("Tags", m.tags.length ? m.tags.join(", ") : "—"),
+    row("SFT data", `${m.data ?? "?"} · ${m.anchors == null ? "anchors unknown" : m.anchors ? "with anchors" : "no anchors"}`),
+    row("Trainer", pre.trainer ? `${pre.trainer} · reflection weight ${pre.reflection_weight}` : "—"),
+    row("Run name", h("code", { class: "path" }, m.abbrev)),
+    sets.length && row("Sets", sets.join(", ")),
+  ];
+
   const card = h("div", { class: "popover info-card", role: "dialog", "aria-label": `${m.label} details` },
     h("header", {},
-      h("div", { class: "eyebrow" }, [method?.label || m.method, m.code && `code ${m.code}`].filter(Boolean).join(" · ")),
+      h("div", { class: "eyebrow" }, [method?.label || m.method, m.code && `code ${m.code}`, m.facets?.origin].filter(Boolean).join(" · ")),
       h("div", { class: "info-title" }, h("span", { class: "dot", style: { background: methodColor(method) } }), m.label),
       m.description && h("p", { class: "section-note", style: { margin: 0 } }, m.description),
       m.note && h("p", { class: "section-note", style: { margin: 0 } }, m.note)),
     h("div", { class: "info-body" },
-      h("div", { class: "info-group" }, "Checkpoints"),
-      row("SFT", `step ${m.step ?? "?"}`, !m.sft.resolved && h("span", { class: "tag warn" }, "folder missing")),
-      row("", ...path(m.sft.path)),
-      row("Pretrain", pre.step != null ? `step ${pre.step}` : "unknown"),
-      row("", ...path(pre.path)),
-      h("div", { class: "info-group" }, "Training"),
-      row("Tags", m.tags.length ? m.tags.join(", ") : "—"),
-      row("SFT data", `${m.data ?? "?"} · ${m.anchors == null ? "anchors unknown" : m.anchors ? "with anchors" : "no anchors"}`),
-      row("Trainer", pre.trainer ? `${pre.trainer} · reflection weight ${pre.reflection_weight}` : "—"),
-      row("Run name", h("code", { class: "path" }, m.abbrev)),
-      sets.length && row("Sets", sets.join(", ")),
+      body,
       h("div", { class: "info-group" }, `Eval runs (${evals.length})`),
       evals.map((e) => row(fmtDate(e.date),
         h("code", { class: "path" }, e.label),
-        h("span", { class: "tt-muted" }, ` · ${exp.splitsById[e.split]?.short || e.split} · ${exp.promptsOf(e)}`)))));
+        h("span", { class: "tt-muted" }, ` · ${exp.evalWhat(e)}`)))));
 
   const r = anchor.getBoundingClientRect();
   const width = Math.min(560, window.innerWidth - 32);

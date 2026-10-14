@@ -1,8 +1,9 @@
 # IPE Experiments dashboard
 
 A static site that summarises IPE experiment runs: which checkpoints exist, how they were
-trained, and how they score. Each experiment gets its own sub-dashboard; the first one is the
-**Foody Experiment** (food-preference injection, evaluated over five levels and three splits).
+trained, and how they score. Each experiment gets its own sub-dashboard: the **Foody Experiment**
+(food-preference injection, evaluated over five levels and three splits) and the **MSM Cheese Experiment**
+(see [below](#msm-cheese-experiment)).
 
 - **Results**: models × levels for one measure. You can view one split or all splits side by side, expand a row for per-topic numbers, and sort by any column.
   Cells are coloured around the baseline model's value in the same column: blue means more preference, red means less. The prompt
@@ -20,6 +21,58 @@ Models are organised into **sets** (Main, Dataset shuffling ablation, Binding ab
 every view. The model picker filters within the set by method (EPE, IEPE, IPE, SPO, HPO), code (111, 101, 011, 001),
 tags and step, and it has presets. Click any model name to open its info card. The card shows the SFT and pretrain
 checkpoint steps and their paths relative to `IPE/`, which you can copy, plus the model's eval runs. Every view's state is in the URL, so you can share a link to it.
+
+## MSM Cheese Experiment
+
+The reproduction of Model Spec Midtraining's cheese experiment (`IPE/msm/`). It shows the paper's released adapters and the
+runs trained here, scored on the two single-value evals, **AFF** (pro-affordability) and **AM** (pro-America).
+
+**Labels** read `<recipe>[ marker][ · tags]`:
+- **Recipe:** `IT`, `AFT`, or `<MSM|SPO>-<Aff|Am>+<IT|AFT>`. For example, `MSM-Am+AFT` is MSM on the pro-America spec, then AFT.
+- **No marker:** your default. The model was trained here, and any midtraining used your own corpus (`data/msm/midtrain/pos_*`, plus `neg_*` for SPO).
+- **`(paper ckpt)`:** the paper authors' released adapter.
+- **`(paper corpus)`:** trained here, but midtrained on the paper's corpus.
+- **Tags:** settings that differ from `msm/conf/train_{msm,aft}.yaml` and from what the launchers pass by default
+  (registry `launcher_defaults`, e.g. the 6,400-document cap of `scripts/msm/train_msm.sh`). Examples: `λ0.5`, `simpo`, `neg −rejection_am`, `lr 2e-4`, an intermediate `step N`, or a corpus other than the arm's `pos_*`.
+
+Runs that differ only by seed get ` · seed N`. The collector derives the labels from the configs (eval `meta.json` → run
+`config.yaml` → `init_adapter` → midtraining `config.yaml`), so every evaluated adapter appears without a registry entry.
+
+**Tabs:**
+- **Results, Compare and Lineage** work as for Foody. The columns are the evals. Expanding a row gives AM's three categories, and there is no Mean column.
+- **Clicking a cell** opens example answers: the questions where the models disagree most, plus a fixed random few. Each shows the judge's verdict on every sample, and how the other models answered.
+- **Hovering:**
+  - a model name gives its whole recipe (corpus, fine-tuning data, identity chats, steps, seed, LoRA);
+  - an eval header gives its data, template and an example;
+  - a cell gives its counts, neither and truncated rates, and the per-sample values;
+  - the **Key** strip explains each abbreviation.
+- **Training:** the midtraining runs (every MSM / SPO run under `outputs/msm/train`, evaluated or not).
+  - A table of where each run ended (next-token loss, pair loss, share of pairs over the margin and the step it first
+    reached 95%, score gap), next to the AFF / AM aligned rate of the model fine-tuned from it and its distance from the
+    AFT-only control.
+  - Curves from each run's last checkpoint (`trainer_state.json`, every 10 steps), one column per arm, sharing a y-scale.
+    The variant buttons are the legend: hide one to rescale. Colours follow the variant (MSM, SPO, SPO · simpo, MSM
+    (paper corpus)), so they match across arms, on the Likelihood tab, and in `msm/plot_scores.py`'s figures.
+- **Likelihood:** the newest `outputs/msm/score/summary_*.json` from `msm/score_docs.py`, scored before AFT. Its sections
+  follow `msm/plot_scores.py`'s figures: what SPO changed next to MSM per document group (with 95% intervals), the scores,
+  the share of pairs over the margin, the value separation on the paper's corpora, the change by token position, and the
+  tokens that dropped most.
+- **Data:**
+  - how a corpus is built (the six generation steps, with counts and prompt templates);
+  - the paper's datasets the models were trained on, with documents per domain and examples, read offline from the local Hugging Face cache;
+  - the eval sets;
+  - a browser over your corpora: spec card and audit, the domain → subdomain → doc type tree, and example documents with the idea each came from.
+
+**Sets** are rules over each model's facets (origin, corpus, value), so new runs fall into place:
+
+| Set | Contents |
+|---|---|
+| Your corpora | shown once one of your corpora has been evaluated |
+| Paper corpus | runs trained here on the paper's data |
+| Paper ckpts | the released adapters (Figure 2) |
+| All | everything |
+
+Colours are centred on each set's AFT-only model.
 
 ## Quick start
 
@@ -42,10 +95,12 @@ registry/<exp>.yaml         hand-curated labels, tag rules, measures, presets, p
 collector/                  python -m collector
   core.py                   hashing, flattening, path sanitising, JSON output
   experiments/foody.py      Foody adapter: lineage, eval settings, metric rows, --report
+  experiments/msm.py        MSM adapter: labels from configs, metric rows, answers.json, datasets.json,
+                            training.json (outputs/msm/train), likelihood.json (outputs/msm/score)
 docs/                       the site (GitHub Pages root); no build step
   index.html, assets/       vanilla JS modules + CSS
   data/experiments.json     hub index
-  data/<exp>/               manifest.json, models.json, evals.json, results.json
+  data/<exp>/               manifest.json, models.json, evals.json, results.json (+ any other part an adapter returns)
 ```
 
 **Identity comes from what was loaded, not from the label.** `eval_multi.sh` labels such as
@@ -93,10 +148,26 @@ Edit `registry/foody.yaml`, then run `make collect` again:
 `make report` prints every published model with its paths and eval runs. It ends with the evaluated checkpoints that aren't
 published yet, along with the `run` and `step` you need to add them.
 
+## Curating the MSM registry
+
+`registry/msm.yaml` doesn't decide what is published. It holds:
+- **`models`:** optional renames, descriptions, notes or `hidden: true`, matched by `adapter` (an HF id) or `run` (a folder in `outputs/msm/train`).
+- **`sets`:** the set rules.
+- **`recipes`:** the display order and colour slots.
+- **`default_corpora`, `default_negatives` and `launcher_defaults`:** what counts as untagged.
+- **`training_metrics`:** the curves on the Training tab: which logged keys, their labels and help.
+- **`evals`, `measures` and `glossary`:** the eval, measure and abbreviation texts.
+- **`paper_datasets`, `flow` and `pipeline`:** the contents of the Data tab.
+
+`make report` lists every model with its weights, midtraining run, corpus and eval runs.
+
 ## Adding another experiment
 
 1. Write `collector/experiments/<name>.py` with two functions: `collect(spec, base_dir, registry, log) -> dict` returns
    `manifest`, `models`, `evals` and `results` in the same shape as Foody, and `report(data) -> str` prints its pairing table.
+   Every other key it returns is written as `<key>.json` too (MSM: `answers`, `datasets`); keys starting with `_` are not.
+   Optional manifest fields adapt the shared views without new code: `terms` (wording), `glossary`, `facets` (picker
+   filters), `level_mean: false`, `tip_measures`, `notes`, per-set `baseline`, and `rows`/`detail`/`example` on levels and topics.
 2. Register it in `collector/experiments/__init__.py` and add an entry to `experiments.yaml`.
 3. If the generic views fit (model × setting × metric), you're done. If they don't, add view modules
    and list them under `EXPERIMENT_VIEWS` in `docs/assets/js/main.js`.

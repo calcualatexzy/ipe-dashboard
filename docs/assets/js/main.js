@@ -3,11 +3,15 @@ import { fmtDate, h } from "./lib/dom.js";
 import { loadExperiment, loadIndex } from "./lib/data.js";
 import { hrefFor, parseHash, store } from "./lib/state.js";
 import { closeInfo } from "./components/info.js";
+import { closeAnswers } from "./components/answers.js";
 import * as results from "./views/results.js";
 import * as compare from "./views/compare.js";
 import * as lineage from "./views/lineage.js";
 import * as prompts from "./views/prompts.js";
 import * as plots from "./views/plots.js";
+import * as datasets from "./views/datasets.js";
+import * as training from "./views/training.js";
+import * as likelihood from "./views/likelihood.js";
 
 const DEFAULT_VIEWS = [
   { id: "results", label: "Results", mod: results },
@@ -17,7 +21,13 @@ const DEFAULT_VIEWS = [
   { id: "plots", label: "Plots", mod: plots, soon: true },
 ];
 // Experiments whose data doesn't fit the generic views can list their own modules here.
-const EXPERIMENT_VIEWS = { foody: DEFAULT_VIEWS };
+const EXPERIMENT_VIEWS = {
+  foody: DEFAULT_VIEWS,
+  // One prompt per eval, so no Prompts tab. Training and Likelihood show the midtraining runs (curves, document
+  // likelihoods before AFT); Data shows how the training corpora were built.
+  msm: [DEFAULT_VIEWS[0], DEFAULT_VIEWS[1], DEFAULT_VIEWS[2], { id: "training", label: "Training", mod: training },
+    { id: "likelihood", label: "Likelihood", mod: likelihood }, { id: "data", label: "Data", mod: datasets }],
+};
 // Params that carry across tabs; view-specific ones (sort, ref, cfg…) are dropped on switch.
 const SHARED = ["set", "models", "protocol", "split", "prompt", "pf", "lv", "measure"];
 
@@ -33,6 +43,7 @@ async function render(navigated = false) {
   lastRoute = route;
   if (navigated) {
     closeInfo();
+    closeAnswers();
     document.querySelectorAll(".popover").forEach((el) => el.remove());
   }
   document.getElementById("tooltip").hidden = true;
@@ -93,7 +104,10 @@ async function renderExperiment(expId, viewId, params) {
         h("span", {}, "Updated ", h("b", {}, fmtDate(m.updated, true)), " UTC"),
         h("span", {}, h("b", {}, m.counts.models), " models"),
         h("span", {}, h("b", {}, m.counts.evals), " eval runs"),
-        h("span", {}, h("b", {}, m.splits.length), " splits · ", h("b", {}, m.prompts.length), " prompts · ", h("b", {}, m.protocols.length), ` protocol${m.protocols.length > 1 ? "s" : ""}`)),
+        h("span", {}, m.terms?.levels
+          ? [h("b", {}, m.levels.length), ` ${exp.terms.levels.toLowerCase()} · `]
+          : [h("b", {}, m.splits.length), " splits · ", h("b", {}, m.prompts.length), " prompts · "],
+        h("b", {}, m.protocols.length), ` protocol${m.protocols.length > 1 ? "s" : ""}`)),
       h("nav", { class: "tabs", "aria-label": "Views" }, views.map((v) =>
         h("a", { href: hrefFor(expId, v.id, shared), "aria-current": v === view ? "page" : null },
           v.label, v.soon && h("span", { class: "soon" }, "soon"))))),

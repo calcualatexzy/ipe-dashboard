@@ -46,7 +46,8 @@ def main(argv: list[str] | None = None) -> int:
 
         data["manifest"].update(id=spec["id"], title=spec["title"], summary=spec.get("summary", ""), updated=now)
         out = args.out / spec["id"]
-        sizes = {name: write_json(out / f"{name}.json", data[name]) for name in ("manifest", "models", "evals", "results", "samples") if name in data}
+        # Every published part becomes <name>.json; keys starting with "_" are for report() only.
+        sizes = {name: write_json(out / f"{name}.json", part) for name, part in data.items() if not name.startswith("_")}
         print(f"[{spec['id']}] wrote " + ", ".join(f"{k}.json {v / 1024:.0f} KB" for k, v in sizes.items()))
         index[spec["id"]] = {
             "id": spec["id"], "title": spec["title"], "summary": spec.get("summary", ""),

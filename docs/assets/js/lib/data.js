@@ -2,6 +2,10 @@
 // (models × evals × tidy result rows), so new experiments reuse these helpers.
 
 const cache = new Map();
+const extras = new Map(); // "<experiment>/<name>" -> parsed JSON, once loaded
+
+/** Wording of the shared views; an experiment's manifest `terms` overrides it (MSM: Evals, Fine-tune, Midtrain…). */
+const TERMS = { level: "Level", levels: "Levels", topic: "topic", topics: "topics", sft: "SFT", pretrain: "Pretrain", method: "Method", code: "Code" };
 
 async function getJSON(path) {
   const res = await fetch(path, { cache: "no-cache" });
@@ -37,6 +41,7 @@ async function build(id) {
   const byEval = new Map(); // "eval|prompt|level|topic|metric" -> row, to read one run consistently
   const runs = new Map(); // all evals (incl. superseded) per cell, newest first
   const coverage = new Map(); // model -> Set("split|protocol|prompt")
+  const levelCoverage = new Map(); // model -> Set(level)
   for (const r of rows) {
     const k = key(r.model, r.split, r.protocol, r.prompt, r.level, r.topic, r.metric);
     if (r.primary) primary.set(k, r);
@@ -45,15 +50,19 @@ async function build(id) {
     runs.get(k).push(r);
     if (!coverage.has(r.model)) coverage.set(r.model, new Set());
     coverage.get(r.model).add(`${r.split}|${r.protocol}|${r.prompt}`);
+    if (!levelCoverage.has(r.model)) levelCoverage.set(r.model, new Set());
+    levelCoverage.get(r.model).add(r.level);
   }
 
-  // Per-sample judge counts: "eval|prompt|level" -> [[pref, opp, unk] per sample index].
+  // Per-sample judge counts: "eval|prompt|level" -> [{label: count} per sample index]. The label columns follow
+  // "sample" (Foody: preference, opposite, unknown; MSM: aligned, misaligned, neither).
   const sc = Object.fromEntries(samples.columns.map((c, i) => [c, i]));
+  const sampleLabels = sc.sample == null ? [] : samples.columns.slice(sc.sample + 1);
   const sampleCounts = new Map();
   for (const r of samples.rows) {
     const k = `${r[sc.eval]}|${r[sc.prompt]}|${r[sc.level]}`;
     if (!sampleCounts.has(k)) sampleCounts.set(k, []);
-    sampleCounts.get(k)[r[sc.sample]] = { preference: r[sc.preference], opposite: r[sc.opposite], unknown: r[sc.unknown] };
+    sampleCounts.get(k)[r[sc.sample]] = Object.fromEntries(sampleLabels.map((l) => [l, r[sc[l]]]));
   }
   // Prompt families: variants run together in one multi-prompt (_pall) run. Without any in the
   // manifest, every prompt forms one family that any multi-prompt run covers.
@@ -68,11 +77,12 @@ async function build(id) {
 
   const by = (xs) => Object.fromEntries(xs.map((x) => [x.id, x]));
   const exp = {
-    id, manifest, models, evals, rows, families,
+    id, manifest, models, evals, rows, families, sampleLabels,
+    terms: { ...TERMS, ...(manifest.terms || {}) },
     modelsById: by(models), evalsById: by(evals), measuresById: by(manifest.measures),
     methodsById: by(manifest.methods), splitsById: by(manifest.splits), promptsById: by(manifest.prompts),
     familiesById: by(families),
-    coverage,
+    coverage, levelCoverage,
     get(m, s, pr, p, l, t, metric) { return primary.get(key(m, s, pr, p, l, t, metric)); },
     allRuns(m, s, pr, p, l, t, metric) { return runs.get(key(m, s, pr, p, l, t, metric)) || []; },
     inEval(ev, p, l, t, metric) { return byEval.get(`${ev}|${p}|${l}|${t ?? ""}|${metric}`); },
@@ -84,6 +94,19 @@ async function build(id) {
       return f ? `${f.label} · ${e.prompts.length} prompts` : `${e.prompts.length} prompts`;
     },
     samplesOf(ev, p, l) { return sampleCounts.get(`${ev}|${p}|${l}`) || []; },
+    /** What an eval run covers, for lineage lists: its levels (MSM) or its split and prompts (Foody). */
+    evalWhat(e) {
+      if (e.levels) return [e.levels.join(", "), e.n_answers && `${e.n_answers.toLocaleString("en-US")} answers`].filter(Boolean).join(" · ");
+      return `${manifest.splits.find((s) => s.id === e.split)?.short || e.split} · ${exp.promptsOf(e)}`;
+    },
+    /** An optional extra data file (answers, datasets), fetched on first use. */
+    extra(name) {
+      const k = `${id}/${name}`;
+      if (!cache.has(k)) cache.set(k, getJSON(`${base}/${name}.json`).then((d) => { extras.set(k, d); return d; }));
+      return cache.get(k);
+    },
+    /** The extra file if it has loaded, so a re-render can draw synchronously and keep the scroll position. */
+    extraNow(name) { return extras.get(`${id}/${name}`); },
     topicsFor(split) {
       const ids = manifest.splits.find((s) => s.id === split)?.topics || [];
       return ids.filter((t) => manifest.topics[t]);

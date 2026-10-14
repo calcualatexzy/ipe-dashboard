@@ -2,7 +2,7 @@
 import { fmtDelta, fmtValue, h, heat, mean } from "../lib/dom.js";
 import { setParams } from "../lib/state.js";
 import { emptyState, field, modelName, modelTip, segmented, select, tip, tipRows } from "../components/ui.js";
-import { baselineValue, cellValue, meanFamily, measureHelp, promptLabel, resolve, setNote, spread, toolbar } from "./common.js";
+import { baselineValue, cellValue, glossary, meanFamily, measureHelp, promptLabel, resolve, setNote, spread, toolbar } from "./common.js";
 
 const MAX_MODELS = 8;
 
@@ -14,7 +14,7 @@ export function render(root, exp, params) {
   const refSelect = models.length > 1 && !tooMany && field("Reference", select(models.map((x) => ({ id: x.id, label: x.label })), ref.id,
     (v) => setParams({ ref: v }), "Reference model"));
   root.append(toolbar(exp, s, { split: "single", prompt: true, levels: true, measure: true }, refSelect));
-  root.append(setNote(s), measureHelp(s.measure, s));
+  root.append(...[setNote(s), glossary(exp), measureHelp(s.measure, s)].filter(Boolean));
 
   if (models.length < 2) {
     root.append(emptyState("Pick two or more models",
@@ -43,6 +43,22 @@ export function render(root, exp, params) {
 function lineageCard(exp, x, isRef) {
   const pre = x.pretrain || {};
   const step = (k, v) => h("div", { class: "step" }, h("span", { class: "k" }, k), h("span", { class: "v" }, v ?? "—"));
+  if (x.facts) {
+    // MSM: the recipe facts, then each stage's checkpoint.
+    const T = exp.terms;
+    const stage = (st, fallback) => st && [
+      step(st.label || fallback, st.hub ? (st.path ? "released adapter" : st.note) : `step ${st.step ?? "?"}${st.resolved ? "" : " · folder missing"}`),
+      st.path && h("div", { class: "step" }, h("span", {}), h("code", { class: "path" }, st.path))];
+    return h("div", { class: "lineage-card" + (isRef ? " ref" : "") },
+      h("div", {}, modelName(exp, x), isRef && h("span", { class: "tag accent" }, "reference")),
+      x.description && h("p", { class: "section-note", style: { margin: 0 } }, x.description),
+      h("div", { class: "chain" },
+        step(T.method, [exp.methodsById[x.method]?.label || x.method, x.facets?.origin].filter(Boolean).join(" · ")),
+        x.tags.length > 0 && step("Tags", x.tags.join(", ")),
+        x.facts.filter(([k]) => !["Recipe", "Weights", "Steps"].includes(k)).map(([k, v]) => step(k, v)),
+        stage(x.pretrain, T.pretrain), stage({ ...x.sft, step: x.step }, T.sft)),
+      x.note && h("p", { class: "section-note", style: { margin: 0 } }, x.note));
+  }
   return h("div", { class: "lineage-card" + (isRef ? " ref" : "") },
     h("div", {}, modelName(exp, x), isRef && h("span", { class: "tag accent" }, "reference")),
     x.description && h("p", { class: "section-note", style: { margin: 0 } }, x.description),
@@ -65,12 +81,14 @@ function resultsTable(exp, s, ordered, ref) {
   const val = (x, l) => cellValue(exp, s, x.id, sp.id, l.id)?.value;
   const base = (l) => baselineValue(exp, s, sp.id, l.id);
   const rows = [...s.levels.map((l) => ({ id: l.id, label: l.label, get: (x) => val(x, l), centre: base(l) })),
-    { id: "Mean", label: s.levels.map((l) => l.id).join("+"), get: (x) => mean(s.levels.map((l) => val(x, l))), mean: true,
-      centre: s.baseline ? mean(s.levels.map((l) => base(l))) : null }];
+    m.level_mean !== false && { id: "Mean", label: s.levels.map((l) => l.id).join("+"), get: (x) => mean(s.levels.map((l) => val(x, l))), mean: true,
+      centre: s.baseline ? mean(s.levels.map((l) => base(l))) : null }].filter(Boolean);
+  const where = [m.splits.length > 1 && sp.label, meanFamily(exp, s.prompt) ? `mean over the ${meanFamily(exp, s.prompt).label} prompts`
+    : m.prompts.length > 1 && `prompt “${s.prompt}”`].filter(Boolean).join(", ");
   const range = spread(ordered.flatMap((x) => rows.map((r) => [r.get(x), r.centre])), s.measure);
 
   const table = h("table", { class: "grid" },
-    h("thead", {}, h("tr", {}, h("th", { class: "model-cell", style: { minWidth: "150px" } }, "Level"),
+    h("thead", {}, h("tr", {}, h("th", { class: "model-cell", style: { minWidth: "150px" } }, exp.terms.level),
       ordered.map((x) => h("th", { class: "num" }, tip(h("span", {}, x.label), () => modelTip(exp, x)),
         h("span", { class: "sub" }, x === ref ? "reference" : "Δ vs reference"))))),
     h("tbody", {}, rows.map((r) => h("tr", {},
@@ -85,21 +103,22 @@ function resultsTable(exp, s, ordered, ref) {
           d != null && h("span", { class: "delta " + (d > 0 ? "up" : d < 0 ? "down" : "") }, fmtDelta(d, s.measure.format) || "0"));
         return tip(td, () => tipRows(`${x.label} · ${r.id}`, `${fmtValue(v, s.measure.format)}${unit}`,
           d != null ? [["Reference", `${fmtValue(rv, s.measure.format)}${unit}`], ["Difference", `${d > 0 ? "+" : d < 0 ? "−" : ""}${fmtDelta(d, s.measure.format)}`]] : [],
-          `${sp.label} · ${meanFamily(exp, s.prompt) ? promptLabel(exp, s.prompt) : `prompt ${s.prompt}`}`));
+          m.splits.length > 1 || m.prompts.length > 1 ? `${sp.label} · ${meanFamily(exp, s.prompt) ? promptLabel(exp, s.prompt) : `prompt ${s.prompt}`}` : null));
       })))));
 
   return h("div", {},
     h("h2", { class: "section" }, "Results"),
-    h("p", { class: "section-note" }, `${s.measure.label} on ${sp.label}, ${meanFamily(exp, s.prompt) ? `mean over the ${meanFamily(exp, s.prompt).label} prompts` : `prompt “${s.prompt}”`}. Deltas against the reference are in percentage points for rates; colours are centred on the baseline.`),
+    h("p", { class: "section-note" }, `${s.measure.label}${where ? ` on ${where}` : ""}. Deltas against the reference are in percentage points for rates; colours are centred on ${m.terms && s.baseline ? s.baseline.label : "the baseline"}.`),
     h("div", { class: "table-wrap" }, table));
 }
 
-const SOURCES = [
-  { id: "pretrain", label: "Pretrain", get: (x) => x.pretrain?.config },
-  { id: "sft", label: "SFT", get: (x) => x.sft?.config },
+const sources = (T) => [
+  { id: "pretrain", label: T.pretrain, get: (x) => x.pretrain?.config },
+  { id: "sft", label: T.sft, get: (x) => x.sft?.config },
 ];
 
 function configDiff(exp, params, ordered, ref) {
+  const SOURCES = sources(exp.terms);
   const src = SOURCES.find((x) => x.id === params.cfg) || SOURCES[0];
   const onlyDiff = params.diff !== "all";
   const configs = ordered.map((x) => src.get(x) || null);
@@ -136,7 +155,8 @@ function configDiff(exp, params, ordered, ref) {
 
   return h("div", {},
     h("h2", { class: "section" }, "Configuration"),
-    h("p", { class: "section-note" }, "Training configs side by side. Shaded cells differ from the reference. Paths are shown relative to the IPE repo."),
+    h("p", { class: "section-note" }, "Training configs side by side. Shaded cells differ from the reference. Paths are shown relative to the IPE repo.",
+      ordered.some((x) => x.sft?.hub) ? " Released adapters have no training config; they show the LoRA settings from their adapter_config.json." : ""),
     controls,
     rows.length ? h("div", { class: "table-wrap" }, table)
       : h("p", { class: "section-note" }, onlyDiff ? "No differences in this config." : "No config available."));

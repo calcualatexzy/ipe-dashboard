@@ -18,19 +18,24 @@ function place(e) {
   t.style.top = `${Math.max(8, y)}px`;
 }
 
+/** Show the tooltip with `node`, next to the pointer of `e`, or below `el` for keyboard focus. */
+export function showTip(node, e, el) {
+  const t = tipEl();
+  t.replaceChildren(node);
+  t.hidden = false;
+  if (e?.clientX != null) place(e);
+  else {
+    const r = el.getBoundingClientRect();
+    place({ clientX: r.left, clientY: r.bottom });
+  }
+}
+
+export const hideTip = () => { tipEl().hidden = true; };
+
 /** Attach a hover/focus tooltip; `render` returns a Node (built lazily on hover). */
 export function tip(el, render) {
-  const show = (e) => {
-    const t = tipEl();
-    t.replaceChildren(render());
-    t.hidden = false;
-    if (e.clientX != null) place(e);
-    else {
-      const r = el.getBoundingClientRect();
-      place({ clientX: r.left, clientY: r.bottom });
-    }
-  };
-  const hide = () => { tipEl().hidden = true; };
+  const show = (e) => showTip(render(), e, el);
+  const hide = hideTip;
   el.addEventListener("mouseenter", show);
   el.addEventListener("mousemove", (e) => { if (!tipEl().hidden) place(e); });
   el.addEventListener("mouseleave", hide);
@@ -96,6 +101,15 @@ export function modelName(exp, m) {
 }
 
 export function modelTip(exp, m) {
+  if (m.facts) {
+    // MSM: the whole recipe, one fact per line.
+    return h("div", {},
+      h("div", { class: "tt-title" }, m.label),
+      m.description && h("div", { style: { marginBottom: "4px" } }, m.description),
+      h("div", { class: "tt-facts" }, m.facts.map(([k, v]) => [h("span", { class: "k" }, k), h("span", {}, v)])),
+      m.tags.length > 0 && h("div", { class: "tt-facts" }, h("span", { class: "k" }, "Tags"), h("span", {}, m.tags.join(", "))),
+      h("div", { class: "tt-muted", style: { marginTop: "6px" } }, "Click the name for paths and eval runs."));
+  }
   const pre = m.pretrain || {};
   return tipRows(m.label, null, [
     ["Method", [exp.methodsById[m.method]?.label || m.method, m.code].filter(Boolean).join(" · ")],

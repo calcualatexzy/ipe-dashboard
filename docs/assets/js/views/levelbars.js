@@ -4,7 +4,7 @@
 import { fmtValue, h, mean, std } from "../lib/dom.js";
 import { setParams } from "../lib/state.js";
 import { field, segmented, select, tip, tipRows } from "../components/ui.js";
-import { cellValue, levelToggle, meanFamily, pickLevels, promptControl, promptLabel, resolvePrompt } from "./common.js";
+import { cellValue, levelToggle, meanFamily, perSample, pickLevels, promptControl, promptLabel, resolvePrompt } from "./common.js";
 
 const MAX_SERIES = 8; // categorical palette slots; a 9th model never gets a generated colour
 const T975 = { 1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262 };
@@ -33,6 +33,7 @@ function stats(xs) {
 
 export function levelBars(exp, s, params) {
   const m = exp.manifest;
+  const T = exp.terms;
   const pctMeasures = m.measures.filter((x) => x.format === "pct");
   const measure = exp.measuresById[params.pmeas] || (s.measure.format === "pct" ? s.measure : pctMeasures[0]);
   const split = exp.splitsById[params.ps] || (s.split !== "all" ? exp.splitsById[s.split] : m.splits[0]);
@@ -52,25 +53,7 @@ export function levelBars(exp, s, params) {
     const cv = cellValue(exp, s, model.id, split.id, level.id, null, { prompt, measure });
     if (!cv) return null;
     if (!measure.counts) return { mean: cv.value, pooled: cv.value, deterministic: true };
-    const estimate = (c) => {
-      const num = measure.counts.num.reduce((a, k) => a + (c[k] || 0), 0);
-      const den = measure.counts.den.reduce((a, k) => a + (c[k] || 0), 0);
-      return den ? num / den : null;
-    };
-    let perSample;
-    if (fam) {
-      // Pool sample i across the family's prompt variants in its multi-prompt run.
-      const lists = fam.prompts.map((p) => exp.samplesOf(cv.eval.id, p, level.id)).filter((x) => x.length);
-      const k = Math.max(0, ...lists.map((x) => x.length));
-      perSample = Array.from({ length: k }, (_, i) => {
-        const c = { preference: 0, opposite: 0, unknown: 0 };
-        for (const l of lists) for (const key in c) c[key] += l[i]?.[key] || 0;
-        return estimate(c);
-      });
-    } else {
-      perSample = exp.samplesOf(cv.row.eval, prompt, level.id).map(estimate);
-    }
-    const st = stats(perSample);
+    const st = stats(perSample(exp, cv, prompt, level.id, measure));
     return st ? { ...st, pooled: cv.value } : { mean: cv.value, pooled: cv.value, deterministic: true };
   }
 
@@ -94,10 +77,10 @@ export function levelBars(exp, s, params) {
   }));
 
   const controls = h("div", { class: "chart-controls" },
-    field("Split", segmented(m.splits.map((x) => ({ id: x.id, label: x.short || x.label, title: x.label })), split.id,
+    m.splits.length > 1 && field("Split", segmented(m.splits.map((x) => ({ id: x.id, label: x.short || x.label, title: x.label })), split.id,
       (v) => setParams({ ps: v }), "Chart split")),
     m.prompts.length > 1 && field("Prompt", promptControl(exp, pick, (v) => setParams({ pp: v.prompt, ppf: v.family }))),
-    field("Levels", levelToggle(m.levels, levels, "pl")),
+    field(T.levels, levelToggle(m.levels, levels, "pl", T.levels)),
     field("Value", select(pctMeasures.map((x) => ({ id: x.id, label: x.label, group: x.group })), measure.id,
       (v) => setParams({ pmeas: v }), "Chart measure")),
     field("Whiskers", segmented([{ id: "sd", label: "±1 SD" }, { id: "ci", label: "95% CI" }, { id: "none", label: "None" }], errMode,
@@ -109,8 +92,8 @@ export function levelBars(exp, s, params) {
   const host = h("div", { class: "chart-host" });
   const k = Math.max(0, ...data.flatMap((x) => x.bars.map((b) => b?.n || 0)));
   const caption = h("p", { class: "section-note", style: { marginTop: "10px" } },
-    `${measure.label} on ${split.label}, ${fam ? `mean over the ${fam.label} prompts` : `prompt “${prompt}”`}`,
-    levels.length < m.levels.length ? `, levels ${levels.map((l) => l.id).join(", ")}. ` : ". ",
+    `${measure.label} on ${split.label}`, fam ? `, mean over the ${fam.label} prompts` : m.prompts.length > 1 ? `, prompt “${prompt}”` : "",
+    levels.length < m.levels.length ? `, ${T.levels.toLowerCase()} ${levels.map((l) => l.id).join(", ")}. ` : ". ",
     measure.counts
       ? [`Bars are the mean of the ${k || "per"}-sample estimates, where estimate i uses the i-th sampled response to every question`,
         fam ? ", pooled over the family’s prompt variants" : "",
@@ -119,8 +102,8 @@ export function levelBars(exp, s, params) {
       : "This measure is deterministic (no sampling), so bars have no whiskers.");
 
   const section = h("section", { class: "chart-section" },
-    h("h2", { class: "section" }, "Across levels"),
-    h("p", { class: "section-note" }, "Absolute values per level. Pick up to eight models; each keeps its colour while others come and go."),
+    h("h2", { class: "section" }, `Across ${T.levels.toLowerCase()}`),
+    h("p", { class: "section-note" }, `Absolute values per ${T.level.toLowerCase()}. Pick up to eight models; each keeps its colour while others come and go.`),
     h("div", { class: "chart-models" }, chips),
     controls,
     models.length ? [legendRow, host, caption] : h("div", { class: "empty" }, h("h3", {}, "No models in the chart"), h("p", {}, "Pick models above.")));
@@ -128,7 +111,7 @@ export function levelBars(exp, s, params) {
   if (models.length) {
     const ro = new ResizeObserver(() => {
       if (!host.isConnected) return ro.disconnect(); // the view was re-rendered
-      draw(host, data, measure, errMode, split, promptLabel(exp, prompt), levels);
+      draw(host, data, measure, errMode, split, promptLabel(exp, prompt), levels, T);
     });
     ro.observe(host);
   }
@@ -137,7 +120,7 @@ export function levelBars(exp, s, params) {
 
 // ------------------------------------------------------------------ drawing
 
-function draw(host, data, measure, errMode, split, promptText, levels) {
+function draw(host, data, measure, errMode, split, promptText, levels, T) {
   const W = host.clientWidth;
   if (!W) return;
   const H = 340, M = { top: 12, right: 8, bottom: 46, left: 44 };
@@ -152,7 +135,7 @@ function draw(host, data, measure, errMode, split, promptText, levels) {
   const pct = (v) => fmtValue(v, "pct");
 
   const root = svg("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img",
-    "aria-label": `${measure.label} by level, ${data.length} models` });
+    "aria-label": `${measure.label} by ${T.level.toLowerCase()}, ${data.length} models` });
 
   // Grid + y ticks (one axis, 0–100%).
   for (let t = 0; t <= 1.0001; t += 0.2) {

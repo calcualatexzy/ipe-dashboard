@@ -2,7 +2,7 @@
 // Chips and presets select everything they match; checkboxes fine-tune the selection.
 import { h, methodColor } from "../lib/dom.js";
 
-const FACETS = [
+const FOODY_FACETS = [
   { id: "method", label: "Method", of: (m) => [m.method] },
   { id: "code", label: "Code", of: (m) => [m.code] },
   { id: "tags", label: "Tags", of: (m) => (m.tags.length ? m.tags : ["none"]) },
@@ -10,6 +10,16 @@ const FACETS = [
   { id: "data", label: "SFT data", of: (m) => [m.data] },
   { id: "step", label: "Step", of: (m) => [m.step] },
 ];
+/** Filter chips: the manifest's `facets` (read from each model's facets) between method and tags, or Foody's set. */
+function facetsOf(exp) {
+  const extra = exp.manifest.facets;
+  if (!extra?.length) return FOODY_FACETS;
+  return [
+    { id: "method", label: exp.terms.method, of: (m) => [m.method] },
+    ...extra.map((f) => ({ id: f.id, label: f.label, of: (m) => [m.facets?.[f.id] ?? null] })),
+    FOODY_FACETS.find((f) => f.id === "tags"),
+  ];
+}
 const filterState = new Map(); // "<experiment>:<pool>" -> { facet: Set(values) }, kept while the page is open
 
 function facetLabel(exp, facet, v) {
@@ -18,13 +28,13 @@ function facetLabel(exp, facet, v) {
   return v == null ? "unknown" : String(v);
 }
 
-function matches(m, filters, query) {
+function matches(m, filters, query, FACETS) {
   for (const f of FACETS) {
     const want = filters[f.id];
     if (want?.size && !f.of(m).some((v) => want.has(v))) return false;
   }
   if (query) {
-    const hay = [m.label, m.abbrev, m.method, m.code, ...m.tags, m.sft?.run, m.pretrain?.run].join(" ").toLowerCase();
+    const hay = [m.label, m.abbrev, m.method, m.code, ...m.tags, m.sft?.run, m.pretrain?.run, ...Object.values(m.facets || {})].join(" ").toLowerCase();
     return query.toLowerCase().split(/\s+/).every((q) => hay.includes(q));
   }
   return true;
@@ -45,6 +55,7 @@ function open(exp, pool, anchor, sel, onChange) {
   const stateKey = `${exp.id}:${pool.map((m) => m.id).join(",")}`;
   if (!filterState.has(stateKey)) filterState.set(stateKey, {});
   const filters = filterState.get(stateKey);
+  const FACETS = facetsOf(exp);
   let query = "";
 
   const pop = h("div", { class: "popover", role: "dialog", "aria-label": "Choose models" });
@@ -53,7 +64,7 @@ function open(exp, pool, anchor, sel, onChange) {
   pop.style.left = `${Math.max(16, Math.min(r.left + window.scrollX, window.innerWidth - 16 - Math.min(620, window.innerWidth - 32)))}px`;
 
   const commit = () => onChange(pool.map((m) => m.id).filter((id) => sel.has(id)));
-  const visible = () => pool.filter((m) => matches(m, filters, query));
+  const visible = () => pool.filter((m) => matches(m, filters, query, FACETS));
   const selectVisible = () => { sel = new Set(visible().map((m) => m.id)); };
 
   const search = h("input", { class: "search", type: "search", placeholder: "Search name, code, tag, run…",
@@ -112,7 +123,7 @@ function open(exp, pool, anchor, sel, onChange) {
           } }),
           h("span", { class: "dot", style: { background: methodColor(meth) } }),
           h("span", {}, m.label),
-          h("span", { class: "sub" }, [m.code && `code ${m.code}`, `step ${m.step}`].filter(Boolean).join(" · "))));
+          h("span", { class: "sub" }, m.sub ?? [m.code && `code ${m.code}`, `step ${m.step}`].filter(Boolean).join(" · "))));
       }
     }
     if (!vis.length) list.append(h("p", { class: "section-note", style: { padding: "16px 8px" } }, "No models match."));

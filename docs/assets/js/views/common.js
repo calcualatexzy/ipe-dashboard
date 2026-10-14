@@ -49,7 +49,8 @@ export function resolve(exp, params) {
     prompt, family,
     measure: exp.measuresById[params.measure] || m.measures[0],
     levels: pickLevels(m.levels, params.lv),
-    baseline: exp.modelsById[m.baseline] || null,
+    // A set may name its own colour centre (MSM: its AFT-only model); otherwise the experiment's.
+    baseline: exp.modelsById[set.baseline] || exp.modelsById[m.baseline] || null,
   };
 }
 
@@ -61,11 +62,11 @@ export function pickLevels(levels, param) {
 }
 
 /** Multi-select level buttons; at least one stays on. Writes `key` (null when all are on). */
-export function levelToggle(all, selected, key) {
+export function levelToggle(all, selected, key, label = "Levels") {
   const on = new Set(selected.map((l) => l.id));
   const write = (next) => setParams({ [key]: next.size === all.length ? null : all.filter((l) => next.has(l.id)).map((l) => l.id).join(",") });
-  return h("div", { class: "seg", role: "group", "aria-label": "Levels" },
-    h("button", { type: "button", "aria-pressed": String(on.size === all.length), title: "All levels",
+  return h("div", { class: "seg", role: "group", "aria-label": label },
+    h("button", { type: "button", "aria-pressed": String(on.size === all.length), title: `All ${label.toLowerCase()}`,
       onclick: () => write(new Set(all.map((l) => l.id))) }, "All"),
     all.map((l) => h("button", {
       type: "button", "aria-pressed": String(on.size < all.length && on.has(l.id)), title: l.label,
@@ -168,7 +169,7 @@ export function toolbar(exp, s, opts = {}, ...extra) {
     bar.append(field("Protocol", select(m.protocols.map((p) => ({ id: p.id, label: `${p.label} (${p.evals})` })), s.protocol,
       (v) => setParams({ protocol: v }), "Eval protocol")));
   }
-  if (opts.split) {
+  if (opts.split && m.splits.length > 1) {
     const splits = m.splits.map((x) => ({ id: x.id, label: x.short || x.label, title: `${x.label}: ${x.topics.join(", ")}` }));
     if (opts.split !== "single" && splits.length > 1) splits.push({ id: "all", label: "All", title: "All splits side by side" });
     bar.append(field("Split", segmented(splits, s.split, (v) => setParams({ split: v }), "Split")));
@@ -177,7 +178,7 @@ export function toolbar(exp, s, opts = {}, ...extra) {
     bar.append(field("Prompt", promptControl(exp, s, ({ prompt, family }) => setParams({ prompt, pf: family }))));
   }
   if (opts.levels) {
-    bar.append(field("Levels", levelToggle(m.levels, s.levels, "lv")));
+    bar.append(field(exp.terms.levels, levelToggle(m.levels, s.levels, "lv", exp.terms.levels)));
   }
   if (opts.measure) {
     bar.append(field("Measure", select(m.measures.map((x) => ({ id: x.id, label: x.label, group: x.group })), s.measure.id,
@@ -195,6 +196,65 @@ export const setNote = (s) => s.set.summary && h("p", { class: "set-note" },
 export const measureHelp = (measure, s) => measure && h("div", { class: "measure-bar" },
   h("p", { class: "section-note" }, h("b", {}, measure.label), measure.help ? ` — ${measure.help}` : ""),
   legend(measure, s?.baseline ? s.baseline.label : null));
+
+/** The abbreviations strip (manifest `glossary`); each term explains itself on hover or focus. */
+export function glossary(exp) {
+  const g = exp.manifest.glossary;
+  if (!g?.length) return null;
+  return h("div", { class: "glossary", role: "list", "aria-label": "Abbreviations" },
+    h("span", { class: "label" }, "Key"),
+    g.map((x) => tip(h("span", { class: "term", role: "listitem", tabindex: "0" }, x.term),
+      () => h("div", {}, h("div", { class: "tt-title" }, x.term), h("div", {}, x.text)))));
+}
+
+/** Hover text for a level (MSM: an eval) or a topic (MSM: a category), when the manifest describes it. */
+export function describedTip(title, x) {
+  if (!x?.rows && !x?.detail && !x?.template && !x?.example) return null;
+  return () => h("div", {},
+    h("div", { class: "tt-title" }, title),
+    x.detail && h("div", { style: { marginBottom: "4px" } }, x.detail),
+    (x.rows || []).map(([k, v]) => h("div", { class: "tt-row" }, h("span", {}, k), h("span", {}, v))),
+    x.template && [h("div", { class: "tt-muted", style: { marginTop: "6px" } }, "Template"), h("pre", { class: "tt-pre" }, x.template)],
+    x.example && [h("div", { class: "tt-muted", style: { marginTop: "6px" } }, "Example"), h("pre", { class: "tt-pre" }, x.example)]);
+}
+
+/**
+ * Per-sample estimates of `measure` for one table cell (each eval samples every question k times; estimate i
+ * uses the i-th response). Empty when the measure has no counts or the eval kept none.
+ */
+export function perSample(exp, cv, prompt, levelId, measure) {
+  if (!cv || !measure.counts) return [];
+  const estimate = (c) => {
+    const num = measure.counts.num.reduce((a, k) => a + (c?.[k] || 0), 0);
+    const den = measure.counts.den.reduce((a, k) => a + (c?.[k] || 0), 0);
+    return den ? num / den : null;
+  };
+  const fam = meanFamily(exp, prompt);
+  if (!fam) return exp.samplesOf(cv.row.eval, prompt, levelId).map(estimate);
+  // Pool sample i across the family's prompt variants in its multi-prompt run.
+  const lists = fam.prompts.map((p) => exp.samplesOf(cv.eval.id, p, levelId)).filter((x) => x.length);
+  const k = Math.max(0, ...lists.map((x) => x.length));
+  return Array.from({ length: k }, (_, i) => {
+    const c = Object.fromEntries(exp.sampleLabels.map((l) => [l, 0]));
+    for (const l of lists) for (const key in c) c[key] += l[i]?.[key] || 0;
+    return estimate(c);
+  });
+}
+
+/** Extra tooltip rows for a cell (manifest `tip_measures`): the other measures' values and the per-sample estimates. */
+export function cellExtras(exp, s, modelId, splitId, levelId, topic, cv) {
+  const m = exp.manifest;
+  if (!m.tip_measures?.length) return [];
+  const pct = (v) => (v == null ? "—" : `${(v * 100).toFixed(1)}%`);
+  const rows = m.tip_measures.filter((id) => id !== s.measure.id && exp.measuresById[id]).map((id) => {
+    const r = cellValue(exp, s, modelId, splitId, levelId, topic, { measure: exp.measuresById[id] });
+    return [exp.measuresById[id].label, r ? `${pct(r.value)}${r.row?.k != null ? ` (${r.row.k})` : ""}` : "—"];
+  });
+  const ps = topic ? [] : perSample(exp, cv, s.prompt, levelId, s.measure).filter((v) => v != null);
+  if (ps.length > 1) rows.push(["Per sample", ps.map((v) => (v * 100).toFixed(1)).join(" · ")]);
+  return rows;
+}
+
 
 /** Groups models by method (manifest order) for table section headers. */
 export function groupByMethod(exp, models) {

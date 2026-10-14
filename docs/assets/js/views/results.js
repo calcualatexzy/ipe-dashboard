@@ -3,7 +3,8 @@
 import { chevron, fmtDate, fmtDelta, fmtValue, h, heat, mean } from "../lib/dom.js";
 import { setParams } from "../lib/state.js";
 import { emptyState, modelName, tip, tipRows } from "../components/ui.js";
-import { baselineValue, cellValue, groupByMethod, meanFamily, measureHelp, promptLabel as labelOf, resolve, setNote, spread, toolbar } from "./common.js";
+import { openAnswers } from "../components/answers.js";
+import { baselineValue, cellExtras, cellValue, describedTip, glossary, groupByMethod, meanFamily, measureHelp, promptLabel as labelOf, resolve, setNote, spread, toolbar } from "./common.js";
 import { levelBars } from "./levelbars.js";
 
 const expanded = new Set();
@@ -12,7 +13,7 @@ export function render(root, exp, params) {
   const s = resolve(exp, params);
   const m = exp.manifest;
   root.append(toolbar(exp, s, { split: true, prompt: true, levels: true, measure: true }));
-  root.append(setNote(s), measureHelp(s.measure, s));
+  root.append(...[setNote(s), glossary(exp), measureHelp(s.measure, s)].filter(Boolean));
   if (!s.models.length) {
     root.append(emptyState("No models selected", "Open the model picker to choose models, or use a preset."));
     return;
@@ -20,6 +21,8 @@ export function render(root, exp, params) {
 
   const splits = s.split === "all" ? m.splits : [exp.splitsById[s.split]];
   const levels = s.levels; // the toolbar's level selection; Mean averages only these
+  const showMean = m.level_mean !== false; // off when levels measure different things (MSM's two evals)
+  const T = exp.terms;
   const fmt = (v) => fmtValue(v, s.measure.format);
   const unit = s.measure.format === "pct" ? "%" : "";
   const fam = meanFamily(exp, s.prompt);
@@ -45,7 +48,7 @@ export function render(root, exp, params) {
     return sortCol === "mean" ? rowMean(x, sp) : val(x, sp, { id: sortCol })?.value;
   };
   const sorted = exp.splitsById[sortSplit] && splits.some((sp) => sp.id === sortSplit)
-    && (sortCol === "mean" || levels.some((l) => l.id === sortCol));
+    && ((showMean && sortCol === "mean") || levels.some((l) => l.id === sortCol));
   const ordered = sorted
     ? [{ method: null, models: [...shown].sort((a, b) => {
         const va = sortVal(a), vb = sortVal(b);
@@ -55,9 +58,10 @@ export function render(root, exp, params) {
       }) }]
     : groupByMethod(exp, shown);
 
-  const header = (sp, colId, label, sub) => {
+  const header = (sp, colId, label, sub, level) => {
     const isSorted = sorted && sortSplit === sp.id && sortCol === colId;
-    return h("th", {
+    const described = level && describedTip(`${level.id} · ${level.label}`, level);
+    const th = h("th", {
       class: "num sortable" + (colId === levels[0].id && splits.length > 1 && sp !== splits[0] ? " split-start" : ""),
       "aria-sort": isSorted ? (dir > 0 ? "ascending" : "descending") : null, tabindex: "0",
       onclick: () => {
@@ -66,21 +70,24 @@ export function render(root, exp, params) {
         else setParams({ sort: null, dir: null });
       },
       onkeydown: (e) => { if (e.key === "Enter") e.currentTarget.click(); },
-      title: "Sort",
+      title: described ? null : "Sort",
     }, label, h("span", { class: "sub" }, sub));
+    return described ? tip(th, described) : th;
   };
 
   const thead = h("thead", {},
     splits.length > 1 && h("tr", { class: "group" }, h("th", { class: "model-cell" }),
-      splits.map((sp, i) => h("th", { colspan: levels.length + 1, class: i ? "split-start" : "" }, sp.label))),
+      splits.map((sp, i) => h("th", { colspan: levels.length + (showMean ? 1 : 0), class: i ? "split-start" : "" }, sp.label))),
     h("tr", {}, h("th", { class: "model-cell" }, "Model"),
       splits.map((sp) => [
-        levels.map((l) => header(sp, l.id, l.id, `${l.label}${unit ? " · " + unit : ""}`)),
-        header(sp, "mean", "Mean", levels.length < m.levels.length ? `${levels.map((l) => l.id).join("+")}${unit ? " · " + unit : ""}` : unit ? `levels · ${unit}` : "levels"),
+        levels.map((l) => header(sp, l.id, l.id, `${l.label}${unit ? " · " + unit : ""}`, l)),
+        showMean && header(sp, "mean", "Mean", levels.length < m.levels.length ? `${levels.map((l) => l.id).join("+")}${unit ? " · " + unit : ""}` : unit ? `levels · ${unit}` : "levels"),
       ])));
 
+  // MSM names the colour centre (its AFT model), since "baseline" there means the IT recipe.
+  const centreName = m.terms && s.baseline ? s.baseline.label : "baseline";
   const deltaRow = (v, c) => (c == null ? null
-    : ["vs baseline", `${v > c ? "+" : v < c ? "−" : "±"}${fmtDelta(v - c, s.measure.format) || "0"} (baseline ${fmt(c)}${unit})`]);
+    : [`vs ${centreName}`, `${v > c ? "+" : v < c ? "−" : "±"}${fmtDelta(v - c, s.measure.format) || "0"} (${m.terms ? "" : "baseline "}${fmt(c)}${unit})`]);
 
   const cell = (model, sp, level, topic, isFirst) => {
     const r = val(model, sp, level, topic);
@@ -95,7 +102,10 @@ export function render(root, exp, params) {
     }
     const c = centre(sp, level, topic);
     const runs = r.row ? exp.allRuns(model.id, sp.id, s.protocol, s.prompt, level.id, topic, s.measure.id) : [];
-    const td = h("td", { class: cls + " heat", style: { background: heat(r.value, c ?? fallback, range) }, tabindex: "0" },
+    const clickable = m.has_answers && !topic;
+    const td = h("td", { class: cls + " heat" + (clickable ? " clickable" : ""), style: { background: heat(r.value, c ?? fallback, range) }, tabindex: "0",
+      onclick: clickable ? (e) => openAnswers(exp, s, model, level, e.currentTarget) : null,
+      onkeydown: clickable ? (e) => { if (e.key === "Enter") openAnswers(exp, s, model, level, e.currentTarget); } : null },
       fmt(r.value), runs.length > 1 && h("span", { class: "badge", "aria-hidden": "true" }));
     return tip(td, () => {
       const ev = r.row ? exp.evalsById[r.row.eval] : r.eval;
@@ -104,19 +114,22 @@ export function render(root, exp, params) {
         `${model.label} · ${level.id} ${level.label}${topic ? ` · ${topic}` : ""}`,
         `${fmt(r.value)}${unit}`,
         [
-          t && ["Topic", `${t.topic}: ${t.preference} vs ${t.opposite}`],
+          t && (t.preference ? ["Topic", `${t.topic}: ${t.preference} vs ${t.opposite}`] : [T.topic[0].toUpperCase() + T.topic.slice(1), t.topic]),
           deltaRow(r.value, c),
           r.row?.k != null && ["Count", `${r.row.k} / ${r.row.n}`],
           ...(r.perPrompt || []).map((x) => [`  ${x.prompt}`, `${fmt(x.row.value)}${unit}`]),
-          ["Split · prompt", `${sp.short || sp.label} · ${promptLabel}`],
+          ...cellExtras(exp, s, model.id, sp.id, level.id, topic, r),
+          (m.splits.length > 1 || m.prompts.length > 1) && ["Split · prompt", `${sp.short || sp.label} · ${promptLabel}`],
           ["Eval run", ev?.label || "?"],
           ["Run date", fmtDate(ev?.date, true)],
         ].filter(Boolean),
-        runs.length > 1 ? `${runs.length - 1} other run(s) cover this cell; showing the preferred one (dedicated single-prompt run first, then newest).` : null);
+        [runs.length > 1 ? `${runs.length - 1} other run(s) cover this cell; showing the preferred one (dedicated single-prompt run first, then newest).` : null,
+          clickable ? "Click for example answers." : null].filter(Boolean).join(" ") || null);
     });
   };
 
   const meanCell = (model, sp, topic) => {
+    if (!showMean) return null;
     const v = rowMean(model, sp, topic);
     const c = centreMean(sp, topic);
     if (v == null) return h("td", { class: "num cell mean missing" }, topic ? "" : "—");
@@ -125,7 +138,7 @@ export function render(root, exp, params) {
   };
 
   const tbody = h("tbody");
-  const colCount = 1 + splits.length * (levels.length + 1);
+  const colCount = 1 + splits.length * (levels.length + (showMean ? 1 : 0));
   // When the baseline isn't among the rows, pin it as a muted reference so the colour centre is visible.
   if (s.baseline && !shown.includes(s.baseline) && splits.some((sp) => levels.some((l) => centre(sp, l) != null))) {
     tbody.append(h("tr", { class: "ref-row" },
@@ -133,14 +146,14 @@ export function render(root, exp, params) {
       splits.map((sp) => [
         levels.map((l, i) => h("td", { class: "num cell" + (i === 0 && splits.length > 1 && sp !== splits[0] ? " split-start" : "") },
           centre(sp, l) == null ? "—" : fmt(centre(sp, l)))),
-        h("td", { class: "num cell mean" }, centreMean(sp) == null ? "—" : fmt(centreMean(sp))),
+        showMean && h("td", { class: "num cell mean" }, centreMean(sp) == null ? "—" : fmt(centreMean(sp))),
       ])));
   }
   for (const g of ordered) {
     if (g.method && ordered.length > 1) tbody.append(h("tr", { class: "group-row" }, h("td", { colspan: colCount }, g.method.label)));
     for (const model of g.models) {
       const open = expanded.has(model.id);
-      const btn = h("button", { class: "expander", type: "button", "aria-expanded": String(open), "aria-label": "Per-topic breakdown",
+      const btn = h("button", { class: "expander", type: "button", "aria-expanded": String(open), "aria-label": `Per-${T.topic} breakdown`,
         onclick: () => { open ? expanded.delete(model.id) : expanded.add(model.id); rerender(); } }, chevron());
       tbody.append(h("tr", {},
         h("td", { class: "model-cell" }, btn, " ", modelName(exp, model)),
@@ -149,8 +162,12 @@ export function render(root, exp, params) {
         const topics = splits.flatMap((sp) => exp.topicsFor(sp.id));
         for (const tId of topics) {
           const t = m.topics[tId];
+          const tTip = describedTip(`${tId} · ${t.topic}`, t);
+          const name = t.preference
+            ? h("td", { class: "model-cell", title: `${t.preference} vs ${t.opposite}` }, `${tId} · ${t.topic}`, h("span", { class: "tag" }, `${t.preference} vs ${t.opposite}`))
+            : h("td", { class: "model-cell", tabindex: tTip ? "0" : null }, `${tId} · ${t.topic}`);
           tbody.append(h("tr", { class: "sub-row" },
-            h("td", { class: "model-cell", title: `${t.preference} vs ${t.opposite}` }, `${tId} · ${t.topic}`, h("span", { class: "tag" }, `${t.preference} vs ${t.opposite}`)),
+            tTip ? tip(name, tTip) : name,
             splits.map((sp) => [levels.map((l, i) => cell(model, sp, l, tId, i === 0)), meanCell(model, sp, tId)])));
         }
       }
@@ -165,7 +182,7 @@ export function render(root, exp, params) {
   root.append(h("p", { class: "section-note", style: { marginTop: "12px" } },
     empty.length ? [h("b", { style: { fontWeight: 500, color: "var(--ink-2)" } }, `No results for ${empty.length} selected model${empty.length > 1 ? "s" : ""}: `),
       empty.map((x) => x.label).join(", "), ". "] : null,
-    "Colours are centred on the baseline’s value in the same column. Mean is the unweighted average over the levels shown; a small dot marks cells more than one eval run covers. Click a column header to sort, a model name for its checkpoints, or the arrow for per-topic rows."));
+    m.notes?.results || "Colours are centred on the baseline’s value in the same column. Mean is the unweighted average over the levels shown; a small dot marks cells more than one eval run covers. Click a column header to sort, a model name for its checkpoints, or the arrow for per-topic rows."));
 
   root.append(levelBars(exp, s, params));
 

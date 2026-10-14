@@ -13,3 +13,17 @@ experiments:
       ipe_root: ..
       evals: outputs/eval/merged
       topics_csv: data/sft/items.csv
+  - id: msm
+    title: MSM Cheese Experiment
+    adapter: msm
+    summary: >-
+      Model Spec Midtraining on Llama-3.1-8B (arXiv 2605.02087, §3.1). Midtraining on a pro-affordability or a
+      pro-America cheese spec, then the same cheese AFT chats; the evals ask which value each model generalizes to.
+      The paper's released adapters next to runs trained here.
+    registry: registry/msm.yaml
+    sources:
+      ipe_root: ..
+      evals: outputs/msm/eval
+      data: data/msm
+      code: msm
+      hf_datasets: true  # the paper's datasets, from the local Hugging Face cache only

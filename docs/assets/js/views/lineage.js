@@ -2,14 +2,15 @@
 // plus coverage and data-quality notes (ambiguous labels, missing folders, overlapping runs).
 import { chevron, fmtDate, h, methodColor } from "../lib/dom.js";
 import { modelName, tip, tipRows } from "../components/ui.js";
-import { groupByMethod, resolve, setNote, toolbar } from "./common.js";
+import { glossary, groupByMethod, resolve, setNote, toolbar } from "./common.js";
 
 const expanded = new Set();
 
 export function render(root, exp, params) {
   const s = resolve(exp, params);
   const m = exp.manifest;
-  root.append(toolbar(exp, s, {}), setNote(s));
+  const T = exp.terms;
+  root.append(...[toolbar(exp, s, {}), setNote(s), glossary(exp)].filter(Boolean));
   const selected = new Set(s.models.map((x) => x.id));
   const name = (id) => exp.modelsById[id]?.label || id;
   const strong = (t) => h("b", { style: { fontWeight: 500, color: "var(--ink)" } }, t);
@@ -28,7 +29,7 @@ export function render(root, exp, params) {
       amb.map((f, i) => [i ? "; " : "", h("code", {}, f.label), ` → ${f.models.map(name).join(", ")}`]))),
     unresolved.length > 0 && h("li", {}, h("span", { class: "ico" }, "○"), h("span", {},
       strong(`${unresolved.length} run folder${unresolved.length > 1 ? "s are" : " is"} no longer in outputs/: `),
-      unresolved.map((f) => name(f.model)).join(", "), ". Their configs and pretrain checkpoint are unavailable.")),
+      unresolved.map((f) => name(f.model)).join(", "), `. Their configs and ${T.pretrain.toLowerCase()} checkpoint are unavailable.`)),
     overlap.length > 0 && h("li", {}, h("span", { class: "ico" }, "↺"), h("span", {},
       strong(`${overlap.length} eval run${overlap.length > 1 ? "s overlap" : " overlaps"} with a preferred run `),
       "for the same model, split, protocol and prompt. Dedicated single-prompt runs are preferred over multi-prompt (_pall) runs, then the newest. Overlapping runs stay listed below.")));
@@ -41,17 +42,21 @@ export function render(root, exp, params) {
     if (!evalsByModel.has(e.model)) evalsByModel.set(e.model, []);
     evalsByModel.get(e.model).push(e);
   }
-  const coverageCell = (x) => h("span", { class: "coverage" }, m.splits.map((sp) => {
+  // With one split (MSM) coverage is per level: which evals each model has results for.
+  const coverageCell = (x) => m.splits.length === 1 ? h("span", { class: "coverage" }, m.levels.map((l) =>
+    tip(h("span", { class: exp.levelCoverage.get(x.id)?.has(l.id) ? "on" : "" }, l.id),
+      () => tipRows(`${l.id} · ${l.label}`, null, [], exp.levelCoverage.get(x.id)?.has(l.id) ? "Evaluated" : "Not evaluated"))))
+    : h("span", { class: "coverage" }, m.splits.map((sp) => {
     const prompts = m.prompts.filter((p) => m.protocols.some((pr) => exp.coverage.get(x.id)?.has(`${sp.id}|${pr.id}|${p.id}`)));
     const label = (sp.short || sp.id) + (prompts.length > 1 ? `×${prompts.length}` : "");
     return tip(h("span", { class: prompts.length ? "on" : "" }, label),
       () => tipRows(sp.label, null, [], prompts.length ? `Prompts: ${prompts.map((p) => p.id).join(", ")}` : "Not evaluated"));
   }));
-  const ckpt = (label, step, path) => h("div", { class: "ckpt" },
+  const ckpt = (label, step, path, note) => h("div", { class: "ckpt" },
     h("span", { class: "k" }, label), h("span", { class: "step-n" }, step ?? "—"),
-    path ? h("code", { class: "path" }, path) : h("span", { class: "tt-muted" }, "unknown"));
+    path ? h("code", { class: "path" }, path) : h("span", { class: "tt-muted" }, note || "unknown"));
 
-  const cols = ["Model", "Code", "Tags", "Coverage", "Checkpoints · step · path relative to IPE/"];
+  const cols = ["Model", T.code, "Tags", "Coverage", "Checkpoints · step · path relative to IPE/"];
   const body = h("tbody");
   for (const g of groupByMethod(exp, s.models)) {
     body.append(h("tr", { class: "group-row" }, h("td", { colspan: cols.length }, g.method.label)));
@@ -66,38 +71,48 @@ export function render(root, exp, params) {
           " ", modelName(exp, x),
           !x.sft.resolved && tip(h("span", { class: "tag warn" }, "missing"),
             () => tipRows("Run folder missing", null, [], "The SFT run is no longer in outputs/; details are parsed from its name."))),
-        h("td", { class: "mono" }, x.code ?? "—"),
+        h("td", { class: x.code ? "mono" : "", style: { whiteSpace: "nowrap" } }, x.code ?? x.facets?.origin ?? "—"),
         h("td", { style: { whiteSpace: "nowrap" } }, x.tags.length
           ? x.tags.map((t) => h("span", { class: "tag", style: { marginLeft: 0, marginRight: "4px" } }, t))
           : h("span", { class: "tt-muted" }, "—")),
         h("td", {}, coverageCell(x)),
-        h("td", { class: "ckpts" }, ckpt("SFT", x.step, x.sft.path), ckpt("Pretrain", pre.step, pre.path))));
+        h("td", { class: "ckpts" }, x.facts
+          ? [x.pretrain && ckpt(pre.label || T.pretrain, pre.step, pre.path, pre.note), ckpt(x.sft.label || T.sft, x.step, x.sft.path)]
+          : [ckpt("SFT", x.step, x.sft.path), ckpt("Pretrain", pre.step, pre.path)])));
       if (open) {
         body.append(h("tr", { class: "sub-row" }, h("td", { colspan: cols.length, style: { paddingLeft: "40px" } },
           h("div", { class: "chain", style: { maxWidth: "980px" } },
             x.description && h("div", { class: "step" }, h("span", { class: "k" }, "About"), h("span", { class: "v" }, x.description)),
             x.note && h("div", { class: "step" }, h("span", { class: "k" }, "Note"), h("span", { class: "v" }, x.note)),
-            h("div", { class: "step" }, h("span", { class: "k" }, "Run name"), h("span", { class: "v mono" }, `${x.abbrev} · started ${fmtDate(x.sft.date, true)}`)),
-            h("div", { class: "step" }, h("span", { class: "k" }, "Trainer"), h("span", { class: "v" },
-              pre.trainer ? `${pre.trainer} · reflection weight ${pre.reflection_weight}` : "—")),
+            h("div", { class: "step" }, h("span", { class: "k" }, "Run name"), h("span", { class: "v mono" }, x.sft.date ? `${x.abbrev} · started ${fmtDate(x.sft.date, true)}` : x.abbrev)),
+            x.facts ? x.facts.filter(([k]) => k !== "Weights").map(([k, v]) => h("div", { class: "step" }, h("span", { class: "k" }, k), h("span", { class: "v" }, v)))
+              : h("div", { class: "step" }, h("span", { class: "k" }, "Trainer"), h("span", { class: "v" },
+                pre.trainer ? `${pre.trainer} · reflection weight ${pre.reflection_weight}` : "—")),
             h("div", { class: "step" }, h("span", { class: "k" }, "Evals"), h("span", { class: "v" },
               evs.map((e) => h("div", {}, h("code", {}, e.label), h("span", { class: "tt-muted" },
-                ` · ${exp.splitsById[e.split]?.short || e.split} · ${exp.promptsOf(e)} · ${fmtDate(e.date, true)}`),
+                ` · ${exp.evalWhat(e)} · ${fmtDate(e.date, true)}`),
                 e.superseded_for.length ? h("span", { class: "tag" }, `not shown for ${e.superseded_for.join(", ")}`) : null))))))));
       }
     }
   }
   root.append(h("h2", { class: "section" }, "Models"),
-    h("p", { class: "section-note" }, "Each name pairs with one SFT checkpoint and the pretrain checkpoint it was initialised from. Click a name to copy paths; open a row for its eval runs."),
+    h("p", { class: "section-note" }, m.notes?.lineage || "Each name pairs with one SFT checkpoint and the pretrain checkpoint it was initialised from. Click a name to copy paths; open a row for its eval runs."),
     h("div", { class: "table-wrap" }, h("table", { class: "grid lineage" },
       h("thead", {}, h("tr", {}, cols.map((c, i) => h("th", { class: i === 0 ? "model-cell" : "" }, c)))), body)));
 
   // ---------------------------------------------------------------- eval runs
   const evals = exp.evals.filter((e) => selected.has(e.model));
+  const cols2 = [
+    { label: "Split", on: m.splits.length > 1, td: (e) => h("td", {}, exp.splitsById[e.split]?.short || e.split) },
+    { label: "Prompts", on: m.prompts.length > 1, td: (e) => h("td", { style: { whiteSpace: "nowrap" } }, exp.promptsOf(e)) },
+    { label: T.level, on: evals.some((e) => e.levels), td: (e) => h("td", {}, (e.levels || []).join(", ")) },
+    { label: "Answers", on: evals.some((e) => e.n_answers), td: (e) => h("td", { class: "num" }, e.n_answers?.toLocaleString("en-US") ?? "—") },
+  ].filter((c) => c.on);
   root.append(h("h2", { class: "section" }, "Eval runs"),
-    h("p", { class: "section-note" }, `${evals.length} merged eval runs for the selected models, newest first. Label is what eval_multi.sh named the run; Model is what it actually loaded.`),
+    h("p", { class: "section-note" }, m.notes?.evals ? `${evals.length} eval runs for the selected models, newest first. ${m.notes.evals}`
+      : `${evals.length} merged eval runs for the selected models, newest first. Label is what eval_multi.sh named the run; Model is what it actually loaded.`),
     h("div", { class: "table-wrap" }, h("table", { class: "grid" },
-      h("thead", {}, h("tr", {}, ["Date", "Eval label", "Model", "Split", "Prompts", "Shown"].map((c) => h("th", {}, c)))),
+      h("thead", {}, h("tr", {}, ["Date", "Eval label", "Model", ...cols2.map((c) => c.label), "Shown"].map((c) => h("th", {}, c)))),
       h("tbody", {}, evals.map((e) => {
         const x = exp.modelsById[e.model];
         return h("tr", {},
@@ -106,8 +121,7 @@ export function render(root, exp, params) {
             () => tipRows("Shared label", null, [], "Other evals with this label loaded different checkpoints."))),
           h("td", { style: { whiteSpace: "nowrap" } }, h("span", { class: "model-name" },
             h("span", { class: "dot", style: { background: methodColor(exp.methodsById[x.method]) } }), x.label)),
-          h("td", {}, exp.splitsById[e.split]?.short || e.split),
-          h("td", { style: { whiteSpace: "nowrap" } }, exp.promptsOf(e)),
+          cols2.map((c) => c.td(e)),
           h("td", {}, e.superseded_for.length
             ? h("span", { class: "tag" }, e.superseded_for.length === e.prompts.length ? "no — overlapped" : `except ${e.superseded_for.join(", ")}`)
             : h("span", { class: "tt-muted" }, "yes")));
