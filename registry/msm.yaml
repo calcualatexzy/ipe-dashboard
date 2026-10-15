@@ -5,7 +5,8 @@
 #   no marker       trained here; any midtraining used your own corpus (data/msm/midtrain/...)
 #   (paper ckpt)    the paper authors' released adapter (huggingface.co/chloeli/*)
 #   (paper corpus)  trained here, but midtrained on the paper's corpus (chloeli/msm-llama-pro-*)
-#   tags            settings that differ from msm/conf/train_{msm,aft}.yaml
+#   tags            settings that differ from msm/conf/train_{msm,aft}.yaml (e.g. "spec prompt": data.spec_prompt)
+# Evals with a spec as the system prompt (outputs/msm/eval/system_<spec>/) are prompts next to "as is", not models.
 # This file only renames, describes or hides models, and defines the sets.
 
 # Recipes in display order; `color` is a categorical slot (1-8), assigned in the palette's fixed order so that
@@ -46,8 +47,10 @@ default_negatives:
   Am:  [neg_cross_pro_affordability, neg_other_mildness, neg_other_consistency, neg_other_open_recipes, neg_other_caution,
         neg_idiosyncratic, neg_rejection_am]
 # Settings the launchers pass by default (scripts/msm/train_msm.sh), on top of msm/conf; runs with them get no tag.
+# msm_spec_prompt: what train_msm.sh passes along with a SPEC_PROMPT (the spec adds about 2,200 tokens).
 launcher_defaults:
   msm: {data: {max_samples: 6400}}
+  msm_spec_prompt: {max_seq_len: 8192}
 
 # Optional per-model overrides, matched by `adapter` (a Hugging Face id) or `run` (a run folder under
 # outputs/msm/train; add /checkpoint-N for an intermediate checkpoint). Keys: id, label, description, note, tags, hidden.
@@ -58,9 +61,9 @@ models:
   - {run: aft_aft-llama-cheese_seed42_from-msm_msm-llama-pro-america_seed42_paper_20261013_074744, id: msm-am-aft-pc}
 
 # Sets scope every view. Rules match model facets (origin: paper ckpt | here; corpus: none | paper | own;
-# value: Aff | Am | none) and `recipe` (recipe ids). `also` adds models by id; `show_if` hides the set until a member
-# matches; `baseline` picks the colour centre: the first member that matches the rule (or the first rule of a list
-# that matches any member).
+# value: Aff | Am | none; spec_prompt: train | none) and `recipe` (recipe ids). `also` adds models by id; `show_if`
+# hides the set until a member matches; `baseline` picks the colour centre: the first member that matches the rule (or
+# the first rule of a list that matches any member); `prompt` is the set's default prompt (all: side by side).
 sets:
   - id: own
     label: Your corpora
@@ -68,6 +71,15 @@ sets:
     match: {origin: here, corpus: [none, own]}
     show_if: {corpus: own}
     baseline: {recipe: aft, origin: here}
+  - id: spec-prompt
+    label: Spec prompt
+    summary: >-
+      MSM with the spec as context before every document (· spec prompt) next to plain MSM and the AFT-only control.
+      As is asks the questions alone (does the value reach the weights?); System puts a spec in the system turn.
+    match: {origin: here, recipe: [aft, msm-aff-aft, msm-am-aft]}
+    show_if: {spec_prompt: train}
+    baseline: {recipe: aft, origin: here}
+    prompt: all
   - id: paper-corpus
     label: Paper corpus
     summary: Runs trained here on the paper's released data, with the paper's IT checkpoint as a reference.
@@ -111,9 +123,9 @@ notes:
     SPO) it continued, with the corpus. Click a name to copy paths; open a row for its eval runs.
   evals: Eval runs are the outputs/msm/eval/<adapter>/<eval>/ folders; Model is the adapter each one actually loaded.
   results: >-
-    Colours are centred on the set's AFT-only model in the same column. A small dot marks cells more than one eval run
-    covers. Click a column header to sort, a model name for its checkpoints, a cell for example answers, or the arrow
-    for per-category rows.
+    Colours are centred on the set's AFT-only model in the same column (on 50% where it has no eval with that prompt).
+    A small dot marks cells more than one eval run covers. Click a column header to sort, a model name for its
+    checkpoints, a cell for example answers, or the arrow for per-category rows.
 
 # The abbreviations strip above the tables; each term explains itself on hover.
 glossary:
@@ -127,10 +139,12 @@ glossary:
   - {term: no marker, text: "Trained here; any midtraining used your own generated corpus (data/msm/midtrain/pos_*, plus neg_* for SPO). Fine-tuning always uses the paper's AFT chats and IT mix, without the identity chats."}
   - {term: (paper ckpt), text: "The paper authors' released adapter (huggingface.co/chloeli/*), evaluated here. Its IT mix also had about 2.5k identity chats that were never released."}
   - {term: (paper corpus), text: "Trained here, but midtrained on the paper's released corpus (chloeli/msm-llama-pro-*)."}
+  - {term: spec prompt, text: "Midtrained with the spec that generated the corpus before every document as context, with no loss on the spec (train_msm.sh SPEC_PROMPT, data.spec_prompt). “prompt <file>” marks another file as the prefix, such as a control."}
+  - {term: "System: … spec", text: "Evaluated with that spec, framed as in training, as the system turn of every question (eval.sh SYSTEM_PROMPT, outputs/msm/eval/system_<spec>/). “As is” asks the questions alone, as the paper."}
 
 # Evals, in column order: `id` is the column name. Their data and wording come from msm/conf/eval.yaml.
 split_label: the held-out evals
-prompt_note: "Each eval question is asked as is, as one user turn without a system prompt."
+prompt_note: "Each eval question is asked as is, as one user turn without a system prompt, as in the paper."
 evals:
   pro_affordability:
     id: AFF

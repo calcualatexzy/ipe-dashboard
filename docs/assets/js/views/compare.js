@@ -13,7 +13,7 @@ export function render(root, exp, params) {
   const tooMany = !params.models && s.models.length > MAX_MODELS;
   const refSelect = models.length > 1 && !tooMany && field("Reference", select(models.map((x) => ({ id: x.id, label: x.label })), ref.id,
     (v) => setParams({ ref: v }), "Reference model"));
-  root.append(toolbar(exp, s, { split: "single", prompt: true, levels: true, measure: true }, refSelect));
+  root.append(toolbar(exp, s, { split: "single", prompt: "single", levels: true, measure: true }, refSelect));
   root.append(...[setNote(s), glossary(exp), measureHelp(s.measure, s)].filter(Boolean));
 
   if (models.length < 2) {
@@ -84,7 +84,7 @@ function resultsTable(exp, s, ordered, ref) {
     m.level_mean !== false && { id: "Mean", label: s.levels.map((l) => l.id).join("+"), get: (x) => mean(s.levels.map((l) => val(x, l))), mean: true,
       centre: s.baseline ? mean(s.levels.map((l) => base(l))) : null }].filter(Boolean);
   const where = [m.splits.length > 1 && sp.label, meanFamily(exp, s.prompt) ? `mean over the ${meanFamily(exp, s.prompt).label} prompts`
-    : m.prompts.length > 1 && `prompt “${s.prompt}”`].filter(Boolean).join(", ");
+    : m.prompts.length > 1 && `prompt “${promptLabel(exp, s.prompt)}”`].filter(Boolean).join(", ");
   const range = spread(ordered.flatMap((x) => rows.map((r) => [r.get(x), r.centre])), s.measure);
 
   const table = h("table", { class: "grid" },
@@ -103,7 +103,7 @@ function resultsTable(exp, s, ordered, ref) {
           d != null && h("span", { class: "delta " + (d > 0 ? "up" : d < 0 ? "down" : "") }, fmtDelta(d, s.measure.format) || "0"));
         return tip(td, () => tipRows(`${x.label} · ${r.id}`, `${fmtValue(v, s.measure.format)}${unit}`,
           d != null ? [["Reference", `${fmtValue(rv, s.measure.format)}${unit}`], ["Difference", `${d > 0 ? "+" : d < 0 ? "−" : ""}${fmtDelta(d, s.measure.format)}`]] : [],
-          m.splits.length > 1 || m.prompts.length > 1 ? `${sp.label} · ${meanFamily(exp, s.prompt) ? promptLabel(exp, s.prompt) : `prompt ${s.prompt}`}` : null));
+          m.splits.length > 1 || m.prompts.length > 1 ? `${sp.label} · ${meanFamily(exp, s.prompt) ? promptLabel(exp, s.prompt) : `prompt ${promptLabel(exp, s.prompt)}`}` : null));
       })))));
 
   return h("div", {},

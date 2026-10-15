@@ -34,9 +34,18 @@ runs trained here, scored on the two single-value evals, **AFF** (pro-affordabil
 - **`(paper corpus)`:** trained here, but midtrained on the paper's corpus.
 - **Tags:** settings that differ from `msm/conf/train_{msm,aft}.yaml` and from what the launchers pass by default
   (registry `launcher_defaults`, e.g. the 6,400-document cap of `scripts/msm/train_msm.sh`). Examples: `λ0.5`, `simpo`, `neg −rejection_am`, `lr 2e-4`, an intermediate `step N`, or a corpus other than the arm's `pos_*`.
+  `spec prompt` marks MSM with the arm's spec as context before every document (`SPEC_PROMPT`, `data.spec_prompt`); another
+  prefix file reads `prompt <file>`.
 
 Runs that differ only by seed get ` · seed N`. The collector derives the labels from the configs (eval `meta.json` → run
 `config.yaml` → `init_adapter` → midtraining `config.yaml`), so every evaluated adapter appears without a registry entry.
+A run folder renamed after its evals were made is found again by its stage and start time (the collector logs it).
+
+**Prompts.** Evals with a spec as the system prompt (`scripts/msm/eval.sh` `SYSTEM_PROMPT`, results in
+`outputs/msm/eval/system_<spec>/`) are prompts of the same models, not new models: **As is** (no system prompt, as the
+paper) and **System: Aff spec** / **System: Am spec**, named from the spec text in their `meta.json`. The Prompt control
+shows one, or **All** side by side; a system-prompt cell's hover card also gives its distance from the same model asked as
+is, and clicking it shows the answers given with that prompt.
 
 **Tabs:**
 - **Results, Compare and Lineage** work as for Foody. The columns are the evals. Expanding a row gives AM's three categories, and there is no Mean column.
@@ -68,6 +77,7 @@ Runs that differ only by seed get ` · seed N`. The collector derives the labels
 | Set | Contents |
 |---|---|
 | Your corpora | shown once one of your corpora has been evaluated |
+| Spec prompt | MSM with and without the spec prompt, next to AFT; opens with every prompt side by side |
 | Paper corpus | runs trained here on the paper's data |
 | Paper ckpts | the released adapters (Figure 2) |
 | All | everything |
@@ -152,7 +162,7 @@ published yet, along with the `run` and `step` you need to add them.
 
 `registry/msm.yaml` doesn't decide what is published. It holds:
 - **`models`:** optional renames, descriptions, notes or `hidden: true`, matched by `adapter` (an HF id) or `run` (a folder in `outputs/msm/train`).
-- **`sets`:** the set rules.
+- **`sets`:** the set rules, each with an optional default `prompt` (`all`: side by side).
 - **`recipes`:** the display order and colour slots.
 - **`default_corpora`, `default_negatives` and `launcher_defaults`:** what counts as untagged.
 - **`training_metrics`:** the curves on the Training tab: which logged keys, their labels and help.

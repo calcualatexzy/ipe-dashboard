@@ -79,7 +79,7 @@ export function levelBars(exp, s, params) {
   const controls = h("div", { class: "chart-controls" },
     m.splits.length > 1 && field("Split", segmented(m.splits.map((x) => ({ id: x.id, label: x.short || x.label, title: x.label })), split.id,
       (v) => setParams({ ps: v }), "Chart split")),
-    m.prompts.length > 1 && field("Prompt", promptControl(exp, pick, (v) => setParams({ pp: v.prompt, ppf: v.family }))),
+    m.prompts.length > 1 && field("Prompt", promptControl(exp, pick, (v) => setParams({ pp: v.prompt, ppf: v.family }), { all: false })),
     field(T.levels, levelToggle(m.levels, levels, "pl", T.levels)),
     field("Value", select(pctMeasures.map((x) => ({ id: x.id, label: x.label, group: x.group })), measure.id,
       (v) => setParams({ pmeas: v }), "Chart measure")),
@@ -92,7 +92,7 @@ export function levelBars(exp, s, params) {
   const host = h("div", { class: "chart-host" });
   const k = Math.max(0, ...data.flatMap((x) => x.bars.map((b) => b?.n || 0)));
   const caption = h("p", { class: "section-note", style: { marginTop: "10px" } },
-    `${measure.label} on ${split.label}`, fam ? `, mean over the ${fam.label} prompts` : m.prompts.length > 1 ? `, prompt “${prompt}”` : "",
+    `${measure.label} on ${split.label}`, fam ? `, mean over the ${fam.label} prompts` : m.prompts.length > 1 ? `, prompt “${promptLabel(exp, prompt)}”` : "",
     levels.length < m.levels.length ? `, ${T.levels.toLowerCase()} ${levels.map((l) => l.id).join(", ")}. ` : ". ",
     measure.counts
       ? [`Bars are the mean of the ${k || "per"}-sample estimates, where estimate i uses the i-th sampled response to every question`,

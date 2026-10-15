@@ -5,25 +5,32 @@ import { setParams } from "../lib/state.js";
 import { modelPicker } from "../components/picker.js";
 import { field, legend, segmented, select, tip } from "../components/ui.js";
 
-/** Prompt values are a prompt id or "mean:<family>", the mean over a family's prompts. */
+/**
+ * Prompt values are a prompt id or "mean:<family>", the mean over a family's prompts. Experiments whose evals ask one
+ * prompt each (manifest prompt_mean: false, MSM) have no means; there "all" shows every prompt side by side.
+ */
 const MEAN = "mean:";
+const ALL = "all";
 
 /** The family whose mean `prompt` stands for, or null for a single prompt. */
 export const meanFamily = (exp, prompt) =>
   (prompt?.startsWith(MEAN) ? exp.familiesById[prompt.slice(MEAN.length)] || null : null);
 
-/** "Diverse mean" or the prompt id. */
+/** "Diverse mean", or the prompt's label (its id in Foody). */
 export const promptLabel = (exp, prompt) => {
   const f = meanFamily(exp, prompt);
-  return f ? `${f.label} mean` : prompt;
+  return f ? `${f.label} mean` : exp.promptsById[prompt]?.label || prompt;
 };
+
+/** Prompts side by side: an experiment without family means, with more than one prompt. */
+const sideBySide = (exp) => exp.manifest.prompt_mean === false && exp.manifest.prompts.length > 1;
 
 /**
  * Resolve a prompt param (and the family param that disambiguates a prompt in several families) to
  * { prompt, family }. "all" is the pre-family spelling of the first family's mean.
  */
 export function resolvePrompt(exp, value, familyId) {
-  if (value === "all") value = MEAN + exp.families[0].id;
+  if (value === ALL && exp.manifest.prompt_mean !== false) value = MEAN + exp.families[0].id;
   const f = meanFamily(exp, value);
   if (f) return { prompt: value, family: f };
   const prompt = exp.promptsById[value] ? value : exp.manifest.prompts[0]?.id;
@@ -40,13 +47,17 @@ export function resolve(exp, params) {
   const set = sets.find((x) => x.id === params.set) || sets[0];
   const pool = set.models.map((id) => exp.modelsById[id]).filter(Boolean);
   const ids = new Set(params.models ? params.models.split(",") : pool.map((x) => x.id));
-  const { prompt, family } = resolvePrompt(exp, params.prompt, params.pf);
+  // A set may name its default prompt (MSM's spec-prompt set: all side by side).
+  const promptAll = sideBySide(exp) && (params.prompt ?? set.prompt) === ALL;
+  const { prompt, family } = resolvePrompt(exp, promptAll ? null : params.prompt ?? set.prompt, params.pf);
   return {
     sets, set, pool,
     models: pool.filter((x) => ids.has(x.id)),
     protocol: pick(params.protocol, m.protocols, m.protocols[0]?.id),
     split: params.split === "all" ? "all" : pick(params.split, m.splits, m.splits[0]?.id),
-    prompt, family,
+    // `prompt` is always one prompt (the first while all are side by side), for views that show one at a time;
+    // `prompts` is what the results table shows.
+    prompt, family, promptAll, prompts: promptAll ? m.prompts.map((p) => p.id) : [prompt],
     measure: exp.measuresById[params.measure] || m.measures[0],
     levels: pickLevels(m.levels, params.lv),
     // A set may name its own colour centre (MSM: its AFT-only model); otherwise the experiment's.
@@ -120,11 +131,23 @@ const familyTip = (f) => h("div", {},
   f.summary && h("div", {}, f.summary),
   h("div", { class: "tt-muted", style: { marginTop: "6px" } }, `Prompts: ${f.prompts.join(", ")}`));
 
+/** Hover text for a single prompt: its label and template. */
+const promptTip = (p) => () => h("div", {}, h("div", { class: "tt-title" }, `Prompt · ${p.label}`), h("pre", { class: "tt-pre" }, p.template));
+
 /**
- * Prompt picker: family buttons (when there are several), then that family's Mean and prompts.
+ * Prompt picker: family buttons (when there are several), then that family's Mean and prompts. Without family means
+ * (MSM) it lists the prompts, plus All (side by side) unless `all` is false.
  * Hovering a prompt shows its template. `onChange({ prompt, family })` gets the new prompt value and family id.
  */
-export function promptControl(exp, { prompt, family }, onChange) {
+export function promptControl(exp, { prompt, family, promptAll }, onChange, { all = true } = {}) {
+  if (exp.manifest.prompt_mean === false) {
+    const ps = exp.manifest.prompts;
+    const opts = [...ps.map((p) => ({ id: p.id, label: p.label })), all && { id: ALL, label: "All" }].filter(Boolean);
+    const seg = segmented(opts, all && promptAll ? ALL : prompt, (v) => onChange({ prompt: v, family: family.id }), "Prompt");
+    [...seg.children].forEach((btn, i) => tip(btn, ps[i] ? promptTip(ps[i])
+      : () => h("div", {}, h("div", { class: "tt-title" }, "All prompts"), h("div", {}, "Every prompt’s columns side by side."))));
+    return seg;
+  }
   const isMean = !!meanFamily(exp, prompt);
   const wrap = h("div", { class: "prompt-ctl" });
   if (exp.families.length > 1) {
@@ -154,7 +177,7 @@ export function promptControl(exp, { prompt, family }, onChange) {
 }
 
 /**
- * Builds the sticky toolbar. `opts` toggles controls: { split: true|"single", prompt, measure }.
+ * Builds the sticky toolbar. `opts` toggles controls: { split: true|"single", prompt: true|"single", measure }.
  * Extra nodes (view-specific controls) go at the end.
  */
 export function toolbar(exp, s, opts = {}, ...extra) {
@@ -175,7 +198,8 @@ export function toolbar(exp, s, opts = {}, ...extra) {
     bar.append(field("Split", segmented(splits, s.split, (v) => setParams({ split: v }), "Split")));
   }
   if (opts.prompt && m.prompts.length > 1) {
-    bar.append(field("Prompt", promptControl(exp, s, ({ prompt, family }) => setParams({ prompt, pf: family }))));
+    bar.append(field("Prompt", promptControl(exp, s, ({ prompt, family }) => setParams({ prompt, pf: family }),
+      { all: opts.prompt !== "single" })));
   }
   if (opts.levels) {
     bar.append(field(exp.terms.levels, levelToggle(m.levels, s.levels, "lv", exp.terms.levels)));
@@ -242,15 +266,15 @@ export function perSample(exp, cv, prompt, levelId, measure) {
 }
 
 /** Extra tooltip rows for a cell (manifest `tip_measures`): the other measures' values and the per-sample estimates. */
-export function cellExtras(exp, s, modelId, splitId, levelId, topic, cv) {
+export function cellExtras(exp, s, modelId, splitId, levelId, topic, cv, prompt = s.prompt) {
   const m = exp.manifest;
   if (!m.tip_measures?.length) return [];
   const pct = (v) => (v == null ? "—" : `${(v * 100).toFixed(1)}%`);
   const rows = m.tip_measures.filter((id) => id !== s.measure.id && exp.measuresById[id]).map((id) => {
-    const r = cellValue(exp, s, modelId, splitId, levelId, topic, { measure: exp.measuresById[id] });
+    const r = cellValue(exp, s, modelId, splitId, levelId, topic, { prompt, measure: exp.measuresById[id] });
     return [exp.measuresById[id].label, r ? `${pct(r.value)}${r.row?.k != null ? ` (${r.row.k})` : ""}` : "—"];
   });
-  const ps = topic ? [] : perSample(exp, cv, s.prompt, levelId, s.measure).filter((v) => v != null);
+  const ps = topic ? [] : perSample(exp, cv, prompt, levelId, s.measure).filter((v) => v != null);
   if (ps.length > 1) rows.push(["Per sample", ps.map((v) => (v * 100).toFixed(1)).join(" · ")]);
   return rows;
 }

@@ -89,14 +89,17 @@ async function build(id) {
     multiRun(m, s, pr, f = families[0].id) { return multiRuns.get(`${m}|${s}|${pr}|${f}`); },
     /** Short description of an eval's prompts: the family it covers, or the single prompt. */
     promptsOf(e) {
-      if (e.prompts.length === 1) return e.prompts[0];
+      if (e.prompts.length === 1) return exp.promptsById[e.prompts[0]]?.label || e.prompts[0];
       const f = families.find((x) => !x.implicit && covers(e, x));
       return f ? `${f.label} · ${e.prompts.length} prompts` : `${e.prompts.length} prompts`;
     },
     samplesOf(ev, p, l) { return sampleCounts.get(`${ev}|${p}|${l}`) || []; },
-    /** What an eval run covers, for lineage lists: its levels (MSM) or its split and prompts (Foody). */
+    /** What an eval run covers, for lineage lists: its levels and any prompt but the first (MSM), or its split and prompts (Foody). */
     evalWhat(e) {
-      if (e.levels) return [e.levels.join(", "), e.n_answers && `${e.n_answers.toLocaleString("en-US")} answers`].filter(Boolean).join(" · ");
+      if (e.levels) {
+        const other = e.prompts?.[0] !== manifest.prompts[0]?.id && exp.promptsOf(e);
+        return [e.levels.join(", "), other, e.n_answers && `${e.n_answers.toLocaleString("en-US")} answers`].filter(Boolean).join(" · ");
+      }
       return `${manifest.splits.find((s) => s.id === e.split)?.short || e.split} · ${exp.promptsOf(e)}`;
     },
     /** An optional extra data file (answers, datasets), fetched on first use. */

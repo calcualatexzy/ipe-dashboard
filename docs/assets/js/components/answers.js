@@ -1,5 +1,5 @@
-// Example answers: opens on click of a results cell (experiments with answers.json). For one model and one level
-// (MSM: an eval) it lists a few questions, the model's first sampled answer with the judge's verdict, the verdicts of
+// Example answers: opens on click of a results cell (experiments with answers.json). For one model, one level
+// (MSM: an eval) and one prompt (MSM: as is, or a spec as the system prompt) it lists a few questions, the model's first sampled answer with the judge's verdict, the verdicts of
 // all its samples, and how the other models in the set answered the same question.
 import { h, methodColor } from "../lib/dom.js";
 import { tip, tipRows } from "./ui.js";
@@ -18,8 +18,9 @@ export function closeAnswers() {
   current?.close();
 }
 
-export function openAnswers(exp, s, model, level, anchor) {
-  const key = `${model.id}|${level.id}`;
+export function openAnswers(exp, s, model, level, anchor, prompt = exp.manifest.prompts[0]?.id) {
+  const key = `${model.id}|${level.id}|${prompt}`;
+  const where = `${level.id} ${level.label}${exp.manifest.prompts.length > 1 ? ` · ${exp.promptsById[prompt]?.label || prompt}` : ""}`;
   if (current?.key === key) { closeAnswers(); return; }
   closeAnswers();
   document.getElementById("tooltip").hidden = true;
@@ -27,7 +28,7 @@ export function openAnswers(exp, s, model, level, anchor) {
   const body = h("div", { class: "info-body answers" }, h("p", { class: "section-note" }, "Loading answers…"));
   const card = h("div", { class: "popover answers-card", role: "dialog", "aria-label": `Example answers of ${model.label} on ${level.id}` },
     h("header", {},
-      h("div", { class: "eyebrow" }, `Example answers · ${level.id} ${level.label}`),
+      h("div", { class: "eyebrow" }, `Example answers · ${where}`),
       h("div", { class: "info-title" }, h("span", { class: "dot", style: { background: methodColor(exp.methodsById[model.method]) } }), model.label),
       h("p", { class: "section-note", style: { margin: 0 } },
         "The questions where the models disagree most, then a fixed random few. The answer shown is the first of each question’s samples; dots are the judge’s verdict on every sample (",
@@ -44,7 +45,8 @@ export function openAnswers(exp, s, model, level, anchor) {
   document.body.append(card);
 
   exp.extra("answers").then((data) => {
-    const lv = data.levels?.[level.id];
+    // Answers per prompt; the other models are those evaluated with the same prompt.
+    const lv = data.prompts?.[prompt]?.[level.id];
     if (!lv) { body.replaceChildren(h("p", { class: "section-note" }, "No example answers for this eval.")); return; }
     const mine = lv.models[model.id] || {};
     const others = s.pool.filter((x) => x.id !== model.id && lv.models[x.id]);

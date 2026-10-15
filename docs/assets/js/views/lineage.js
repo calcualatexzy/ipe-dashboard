@@ -50,7 +50,7 @@ export function render(root, exp, params) {
     const prompts = m.prompts.filter((p) => m.protocols.some((pr) => exp.coverage.get(x.id)?.has(`${sp.id}|${pr.id}|${p.id}`)));
     const label = (sp.short || sp.id) + (prompts.length > 1 ? `×${prompts.length}` : "");
     return tip(h("span", { class: prompts.length ? "on" : "" }, label),
-      () => tipRows(sp.label, null, [], prompts.length ? `Prompts: ${prompts.map((p) => p.id).join(", ")}` : "Not evaluated"));
+      () => tipRows(sp.label, null, [], prompts.length ? `Prompts: ${prompts.map((p) => p.label || p.id).join(", ")}` : "Not evaluated"));
   }));
   const ckpt = (label, step, path, note) => h("div", { class: "ckpt" },
     h("span", { class: "k" }, label), h("span", { class: "step-n" }, step ?? "—"),

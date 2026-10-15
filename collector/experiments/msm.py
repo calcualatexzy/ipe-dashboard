@@ -1,10 +1,13 @@
 """MSM Cheese Experiment adapter (Model Spec Midtraining, arXiv 2605.02087, §3.1).
 
 Identity comes from what each eval loaded, never from folder names:
-  outputs/msm/eval/<adapter>/<eval>/meta.json --adapter--> a Hugging Face id (the paper's released adapters), or a
-  local run's final/ or checkpoints/checkpoint-N
+  outputs/msm/eval/[system_<spec>/]<adapter>/<eval>/meta.json --adapter--> a Hugging Face id (the paper's released
+  adapters), or a local run's final/ or checkpoints/checkpoint-N (a run folder renamed since: the one folder with
+  its stage and start time)
   local run config.yaml --init_adapter--> the midtraining run (MSM, or SPO with spo.enabled), whose data.msm is
   the corpus
+  meta.json system_prompt --> the prompt: "as-is" without one, else system_<spec file> for the spec under msm/spec
+  whose text it holds
 
 Every evaluated adapter is published. Its label is built from those configs:
   <recipe>[ (paper ckpt) | (paper corpus)][ · tag · tag]
@@ -13,7 +16,8 @@ Every evaluated adapter is published. Its label is built from those configs:
   (paper ckpt)  the paper authors' released adapter
   (paper corpus) trained here, midtrained on the paper's corpus (a Hugging Face dataset)
   tags          settings that differ from msm/conf/train_{msm,aft}.yaml: SPO λ / loss / β / γ, negatives,
-                learning rate, epochs, LoRA rank, an intermediate checkpoint, a non-default corpus
+                learning rate, epochs, LoRA rank, an intermediate checkpoint, a non-default corpus, a spec prompt
+                (data.spec_prompt: "spec prompt" for the arm's own spec, "prompt <file>" for any other)
 The registry renames, describes or hides models, and defines the sets (by rules over each model's facets).
 
 The adapter also writes answers.json (example answers per model and eval), datasets.json (the Data tab: the
@@ -43,9 +47,11 @@ HF_ID = re.compile(r"^[A-Za-z0-9][\w.-]*/[\w.-]+$")
 RESULT_COLUMNS = ["eval", "model", "split", "protocol", "prompt", "level", "topic", "metric", "value", "k", "n", "primary"]
 OUTCOMES = ("aligned", "misaligned", "neither")
 SAMPLE_COLUMNS = ["eval", "prompt", "level", "sample", *OUTCOMES]
-SPLIT, PROMPT = "heldout", "as-is"  # one split and one prompt: each eval asks its own questions as is
-# Meta keys that name what was evaluated, not how; the rest (plus the judge) is the protocol.
-NON_PROTOCOL = {"adapter", "data", "kind"}
+SPLIT, PROMPT = "heldout", "as-is"  # one split; each eval asks its own questions as is, or after a spec system turn
+RUN_TIME = re.compile(r"^([^_]+)_.*_(\d{8}_\d{6})$")  # <stage>_..._<start time>, as msm/train_*.py name runs
+# Meta keys that name what was evaluated, not how; the rest (plus the judge) is the protocol. The system prompt is
+# the prompt dimension instead.
+NON_PROTOCOL = {"adapter", "data", "kind", "system_prompt"}
 DOC_CHARS = 3000  # example documents are cut here
 ANSWER_CHARS = 1400
 
@@ -137,6 +143,47 @@ class Ctx:
         for stage, over in (registry.get("launcher_defaults") or {}).items():
             self.defaults.setdefault(stage, {}).update(flatten(over))
         self.values = registry.get("values", {})
+        self._moved: dict[Path, Path | None] = {}
+        self._specs: list[tuple[Path, str]] | None = None
+
+    def renamed(self, run_dir: Path) -> Path | None:
+        """A run folder renamed after its evals were made: the one folder beside it with the same stage and start time."""
+        if run_dir not in self._moved:
+            m = RUN_TIME.match(run_dir.name)
+            same = []
+            if m and run_dir.parent.is_dir():
+                same = [d for d in run_dir.parent.iterdir()
+                        if (k := RUN_TIME.match(d.name)) and k.groups() == m.groups() and (d / "config.yaml").exists()]
+            self._moved[run_dir] = same[0] if len(same) == 1 else None
+            if len(same) == 1:
+                self.log(f"[msm] {run_dir.name} is gone; reading {same[0].name}, the one run with its stage and start time")
+        return self._moved[run_dir]
+
+    def spec_of(self, system: str) -> Path | None:
+        """The spec file under msm/spec whose text a system prompt holds (msm/eval.py frames it as the spec prompt)."""
+        if self._specs is None:
+            root = self.msm_dir / "spec"
+            files = sorted(root.rglob("*.txt")) if root.is_dir() else []
+            self._specs = [(p, t) for p in files if (t := p.read_text(encoding="utf-8").strip())]
+        hits = [(len(t), p) for p, t in self._specs if t in system]
+        return max(hits)[1] if hits else None
+
+    def prompt(self, system: str | None) -> dict:
+        """The prompt of an eval: as is, or a spec as the system turn, named after the spec file like the eval folder."""
+        if not system:
+            return {"id": PROMPT, "label": "As is", "template": self.registry.get("prompt_note", "")}
+        spec = self.spec_of(system)
+        if spec is None:
+            pid = f"system_{short_hash(system, 6)}"
+            return {"id": pid, "label": f"System: {pid}", "template": _cut(system, 600)[0]}
+        value = self.value_of(spec.stem)
+        kind = spec.parent.name  # pos | neg | spec (the paper's specs)
+        name = (f"{value} spec" if value and kind == "pos" else f"{value} spec (paper)" if value and kind == "spec"
+                else spec.stem)
+        frame = system.split("<spec>")[0].strip()
+        return {"id": f"system_{spec.stem}", "label": f"System: {name}", "spec": self.rel(spec), "value": value,
+                "template": f"System turn: {self.rel(spec)}, framed as the spec prompt of msm/train_data.py\n"
+                            f"  {frame}\n  <spec> … </spec>\nthen each question as one user turn."}
 
     def local(self, s: str) -> Path | None:
         """A run path from a config or eval (absolute on any mount, or relative to IPE) as a path under IPE."""
@@ -183,6 +230,8 @@ class Lineage:
             run_dir, ckpt = path.parents[1], int(CHECKPOINT.match(path.name).group(1))
         else:
             run_dir = path
+        if not run_dir.exists() and (moved := self.ctx.renamed(run_dir)):
+            path, run_dir = moved / path.relative_to(run_dir), moved
         cfg = _load_yaml(run_dir / "config.yaml") if (run_dir / "config.yaml").exists() else None
         steps = ckpt
         if steps is None and (run_dir / "checkpoints").is_dir():
@@ -274,7 +323,7 @@ class Lineage:
         return {
             "key": repo, "abbrev": repo, "origin": "paper", "seed": None,
             "recipe": {"mid": mid, "value": value, "ft": ft},
-            "corpus": corpus, "max_docs": None, "spo": None, "tags": [],
+            "corpus": corpus, "max_docs": None, "spo": None, "spec_prompt": None, "tags": [],
             "step": None,
             "sft": {"run": repo, "path": url, "hub": True, "resolved": True, "date": None, "suffix": None,
                     "label": ft or "Adapter", "config": self._hub_config(repo)},
@@ -307,7 +356,7 @@ class Lineage:
         else:  # a midtraining run evaluated as is
             ft, mid_run, mid_cfg, ft_tags, it, hub_init = None, run, cfg, [], [], None
             ft_cfg = None
-        spo = None
+        spo = spec_prompt = None
         mid = corpus = value = None
         if mid_cfg:
             spo_cfg = mid_cfg.get("spo") or {}
@@ -322,12 +371,20 @@ class Lineage:
                 negs = spo_cfg.get("negatives") or []
                 spo = {"negatives": [self._corpus(s) for s in negs], "weight": spo_cfg.get("weight"),
                        "loss": spo_cfg.get("pair_loss_type"), "beta": spo_cfg.get("beta"), "gamma": spo_cfg.get("gamma")}
-            tags += self._tags(mid_cfg, d["msm"], keys)
+            spec_prompt = (mid_cfg.get("data") or {}).get("spec_prompt")
+            # With a spec prompt, the launcher's longer max_seq_len is a default too (launcher_defaults msm_spec_prompt).
+            tags += self._tags(mid_cfg, {**d["msm"], **(d.get("msm_spec_prompt", {}) if spec_prompt else {})}, keys)
             if mid == "SPO" and (t := self._negatives_tag(spo_cfg.get("negatives") or [], value)):
                 tags.append(t)
             default_corpus = (self.ctx.registry.get("default_corpora") or {}).get(value)
             if corpus and corpus["kind"] == "own" and default_corpus and corpus["name"] != default_corpus:
                 tags.append(corpus["name"])
+            # The spec as context before every document (no loss on it): the arm's own spec, or a control prefix.
+            if spec_prompt:
+                stem = Path(spec_prompt).stem
+                own = "neg" not in Path(spec_prompt).parts and self.ctx.value_of(stem) == value
+                tags.append("spec prompt" if own else f"prompt {stem}")
+                spec_prompt = self.ctx.rel(self.ctx.local(spec_prompt))
             if mid_run and not mid_run["final"]:
                 tags.append(f"{mid} step {mid_run['step']}")
         elif hub_init:
@@ -348,7 +405,7 @@ class Lineage:
             "key": key, "abbrev": run["run"], "origin": "here", "seed": seed,
             "recipe": {"mid": mid, "value": value, "ft": ft},
             "corpus": corpus, "max_docs": (mid_cfg.get("data") or {}).get("max_samples") if mid_cfg else None,
-            "spo": spo, "tags": tags,
+            "spo": spo, "spec_prompt": spec_prompt, "tags": tags,
             "step": run["step"],
             "sft": {"run": run["run"], "path": run["path"], "hub": False, "resolved": run["resolved"], "date": run["date"],
                     "suffix": cfg.get("suffix"), "label": ft or mid or "Adapter",
@@ -374,6 +431,7 @@ class Lineage:
                 "corpus_name": (m["corpus"] or {}).get("name", "none"),
                 "value": r["value"] or "none",
                 "seed": m["seed"],
+                "spec_prompt": "train" if m["spec_prompt"] else "none",
             }
         _disambiguate(list(self.models.values()))
 
@@ -420,6 +478,8 @@ class Lineage:
             docs = f" · {used:,} of {n:,} docs" if n and used < n else f" · {n:,} docs" if n else ""
             facts.append([f"{r['mid']} corpus", f"{c['name']} · {'the paper’s corpus' if c['kind'] == 'paper' else 'your corpus'}"
                           + docs])
+        if m.get("spec_prompt"):
+            facts.append(["Spec prompt", f"{m['spec_prompt']} before every document, with no loss on it"])
         if s := m["spo"]:
             names = [x["name"].removeprefix("neg_") for x in s["negatives"] if x]
             facts.append(["SPO", f"λ {_num(s['weight'])} · {s['loss']} · β {_num(s['beta'])} · γ {_num(s['gamma'])}"])
@@ -822,9 +882,11 @@ def midtraining(ctx: Ctx, models: list[dict], sizes: dict[str, int]) -> list[dic
             "seed": m["seed"], "date": m["sft"]["date"], "steps": m["step"], "facts": lineage._facts(m, sizes),
             "models": continued.get(m["sft"]["run"], []), "curves": _curves(ctx, run_dir),
         })
-    # Colour slots by variant, in a fixed order: your corpora before the paper's, MSM before SPO, untagged before tagged
-    # (MSM, SPO, SPO · simpo get slots 1-3, as in msm/plot_scores.py).
-    variants = sorted({r["variant"] for r in out}, key=lambda v: ("(paper corpus)" in v, not v.startswith("MSM"), v.count(" · "), v))
+    # Colour slots by variant, in a fixed order: your corpora before the paper's, then plain MSM, the SPO variants
+    # (untagged first) and the tagged MSM variants, such as MSM · spec prompt (MSM, SPO, SPO · simpo keep slots 1-3, as
+    # in msm/plot_scores.py).
+    variants = sorted({r["variant"] for r in out}, key=lambda v: ("(paper corpus)" in v, v.startswith("MSM · "),
+                                                                  not v.startswith("MSM"), v.count(" · "), v))
     slot = {v: i + 1 if i < 8 else 0 for i, v in enumerate(variants)}
     values = list(ctx.values)
     for r in out:
@@ -923,12 +985,15 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
     ignore = [re.compile(p) for p in registry.get("protocol_ignore", [])]
 
     protocols: dict[str, dict] = {}
+    prompts: dict[str, dict] = {PROMPT: ctx.prompt(None)}
     evals: list[dict] = []
     rows: list[list] = []
     sample_rows: list[list] = []
-    answers_raw: dict[str, dict[str, dict]] = defaultdict(dict)  # level -> model key -> samples by row
+    # prompt -> level -> model key -> samples by row
+    answers_raw: dict[str, dict[str, dict[str, dict]]] = defaultdict(lambda: defaultdict(dict))
     questions: dict[str, dict[int, dict]] = defaultdict(dict)  # level -> row -> question
-    metric_files = sorted(ctx.evals_dir.glob("*/*/metrics.json"))
+    # Evals of the questions as is, then those with a spec as the system prompt (msm/eval.py puts them in system_<spec>/).
+    metric_files = sorted(ctx.evals_dir.glob("*/*/metrics.json")) + sorted(ctx.evals_dir.glob("system_*/*/*/metrics.json"))
     log(f"[msm] {len(metric_files)} eval results under {ctx.evals_dir}")
 
     for mpath in metric_files:
@@ -941,23 +1006,27 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
             continue
         model = lineage.resolve(adapter)
         level = reg_evals.get(edir.name, {}).get("id", edir.name.upper())
+        prompt = ctx.prompt(meta.get("system_prompt"))
+        prompts.setdefault(prompt["id"], prompt)
+        prompt = prompt["id"]
         proto_cfg = {k: v for k, v in meta.items() if k not in NON_PROTOCOL}
         proto_cfg.update({f"judge.{k}": v for k, v in (metrics.get("judge") or {}).items()})
         proto_cfg = {k: v for k, v in proto_cfg.items() if not any(p.search(k) for p in ignore)}
         proto_id = short_hash(proto_cfg, 6)
         protocols.setdefault(proto_id, {"id": proto_id, "judge": (metrics.get("judge") or {}).get("model"), "config": ctx.san.value(proto_cfg)})
 
-        eval_id = short_hash(f"{edir.parent.name}/{edir.name}", 8)
+        run_id = edir.relative_to(ctx.evals_dir).as_posix()  # [system_<spec>/]<adapter>/<eval>
+        eval_id = short_hash(run_id, 8)
         evals.append({
-            "id": eval_id, "run_id": f"{edir.parent.name}/{edir.name}", "label": f"{edir.parent.name} · {edir.name}",
+            "id": eval_id, "run_id": run_id, "label": run_id.replace("/", " · "),
             "date": _mtime(mpath), "model": model["key"], "split": SPLIT, "protocol": proto_id,
-            "prompts": [PROMPT], "levels": [level], "n_questions": metrics.get("n_questions"),
+            "prompts": [prompt], "levels": [level], "n_questions": metrics.get("n_questions"),
             "n_answers": metrics.get("n_answers"), "n_judged": metrics.get("n_judged"), "shards": 0,
         })
 
-        def emit(topic, metric, value, k, n, _l=level, _e=eval_id, _m=model["key"], _p=proto_id):
+        def emit(topic, metric, value, k, n, _l=level, _e=eval_id, _m=model["key"], _p=proto_id, _pr=prompt):
             if value is not None:
-                rows.append([_e, _m, SPLIT, _p, PROMPT, _l, topic, metric, _round(value), k, n, 0])
+                rows.append([_e, _m, SPLIT, _p, _pr, _l, topic, metric, _round(value), k, n, 0])
         _metric_rows(metrics, emit, None)
         for key in [k for k in metrics if k.startswith("by_")]:
             for cat, cm in metrics[key].items():
@@ -977,10 +1046,10 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
                 questions[level][s["row"]] = {"question": s["question"], "options": {"A": s.get("option_a"), "B": s.get("option_b")},
                                               "aligned": s.get("aligned_option"), "category": s.get("category")}
         for i in sorted(per):
-            sample_rows.append([eval_id, PROMPT, level, i, *per[i]])
+            sample_rows.append([eval_id, prompt, level, i, *per[i]])
         for row in by_row.values():
             row.sort(key=lambda s: s["sample"])
-        answers_raw[level][model["key"]] = by_row
+        answers_raw[prompt][level][model["key"]] = by_row
 
     datasets = Datasets(ctx)
     paper_cards, evalsets = datasets.paper()
@@ -998,14 +1067,14 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
     keep = {e["id"] for e in evals}
     sample_rows = [r for r in sample_rows if r[0] in keep]
 
-    # Newest run wins per model × protocol × level (an adapter evaluated again under another out_dir).
+    # Newest run wins per model × protocol × prompt × level (an adapter evaluated again under another out_dir).
     latest: dict[tuple, str] = {}
     for e in sorted(evals, key=lambda e: e["date"] or ""):
-        latest[(e["model"], e["protocol"], e["levels"][0])] = e["id"]
+        latest[(e["model"], e["protocol"], e["prompts"][0], e["levels"][0])] = e["id"]
     for r in rows:
-        r[-1] = int(latest.get((r[1], r[3], r[5])) == r[0])
+        r[-1] = int(latest.get((r[1], r[3], r[4], r[5])) == r[0])
     for e in evals:
-        e["superseded_for"] = [] if latest[(e["model"], e["protocol"], e["levels"][0])] == e["id"] else [PROMPT]
+        e["superseded_for"] = [] if latest[(e["model"], e["protocol"], e["prompts"][0], e["levels"][0])] == e["id"] else e["prompts"]
         e["label_shared"] = False
 
     # ---------------------------------------------------------------- manifest pieces
@@ -1070,7 +1139,7 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
         rules = rules if isinstance(rules, list) else [rules]  # fallbacks, first match wins
         base = next((m["id"] for rule in rules for m in models if m["id"] in ids and _matches(m, rule)), None)
         sets.append({"id": st["id"], "label": st["label"], "summary": st.get("summary", ""), "models": ids,
-                     "baseline": base, "plot": ids[:8]})
+                     "baseline": base, "plot": ids[:8], **({"prompt": st["prompt"]} if st.get("prompt") else {})})
     for m in models:
         m["sets"] = [st["id"] for st in sets if m["id"] in st["models"]]
 
@@ -1078,28 +1147,32 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
     flags += [{"kind": "unresolved-pretrain", "model": m["id"]} for m in models if m["pretrain"] and not m["pretrain"]["resolved"]]
 
     # ---------------------------------------------------------------- example answers
+    # Per prompt and level, so the models are compared on the questions they disagree on under that prompt.
     n_spread, n_random = registry.get("answers", {}).get("spread", 3), registry.get("answers", {}).get("random", 3)
-    answers: dict[str, Any] = {"levels": {}}
-    for level, by_model in answers_raw.items():
-        by_model = {k: v for k, v in by_model.items() if k not in hidden}
-        outcomes = {k: {row: [s.get("outcome") for s in ss] for row, ss in v.items()} for k, v in by_model.items()}
-        picked = _pick_rows(outcomes, n_spread, n_random)
-        qs = []
-        for row, why in picked:
-            q = questions[level][row]
-            qs.append({"row": row, "why": why, **q, "category": categories.get(q["category"]) if q.get("category") else None})
-        per_model = {}
-        for key, v in by_model.items():
-            per_model[id_of[key]] = {}
-            for row, _ in picked:
-                ss = v.get(row) or []
-                if not ss:
-                    continue
-                first = ss[0]
-                text, cut = _cut(first.get("response", ""), ANSWER_CHARS)
-                per_model[id_of[key]][str(row)] = {"outcomes": [s.get("outcome") for s in ss], "response": text, "cut": cut,
-                                                   "truncated": first.get("finish") == "length", "verdict": first.get("outcome")}
-        answers["levels"][level] = {"questions": qs, "models": per_model}
+    answers: dict[str, Any] = {"prompts": {}}
+    for prompt, levels_raw in answers_raw.items():
+        for level, by_model in levels_raw.items():
+            by_model = {k: v for k, v in by_model.items() if k not in hidden}
+            if not by_model:
+                continue
+            outcomes = {k: {row: [s.get("outcome") for s in ss] for row, ss in v.items()} for k, v in by_model.items()}
+            picked = _pick_rows(outcomes, n_spread, n_random)
+            qs = []
+            for row, why in picked:
+                q = questions[level][row]
+                qs.append({"row": row, "why": why, **q, "category": categories.get(q["category"]) if q.get("category") else None})
+            per_model = {}
+            for key, v in by_model.items():
+                per_model[id_of[key]] = {}
+                for row, _ in picked:
+                    ss = v.get(row) or []
+                    if not ss:
+                        continue
+                    first = ss[0]
+                    text, cut = _cut(first.get("response", ""), ANSWER_CHARS)
+                    per_model[id_of[key]][str(row)] = {"outcomes": [s.get("outcome") for s in ss], "response": text, "cut": cut,
+                                                       "truncated": first.get("finish") == "length", "verdict": first.get("outcome")}
+            answers["prompts"].setdefault(prompt, {})[level] = {"questions": qs, "models": per_model}
 
     # ---------------------------------------------------------------- datasets.json
     data_page = {
@@ -1138,8 +1211,11 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
         "levels": levels,
         "level_mean": False,
         "splits": [split],
-        "prompts": [{"id": PROMPT, "label": PROMPT, "template": registry.get("prompt_note", "")}],
+        # As is first (the paper's readout, and what the Training tab reads), then the system prompts that have results.
+        "prompts": [prompts[PROMPT]] + sorted((p for k, p in prompts.items() if k != PROMPT and any(r[4] == k for r in rows)),
+                                              key=lambda p: (not p.get("value"), p["label"])),
         "prompt_families": [],
+        "prompt_mean": False,  # each eval asks one prompt; with several, Results shows them side by side, never averaged
         "protocols": protos,
         "measures": registry.get("measures", []),
         "methods": method_list,
@@ -1150,7 +1226,7 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
         "notes": registry.get("notes", {}),
         "glossary": registry.get("glossary", []),
         "tip_measures": registry.get("tip_measures", []),
-        "has_answers": bool(answers["levels"]),
+        "has_answers": bool(answers["prompts"]),
         "has_datasets": True,
         "has_training": any(r["curves"] for r in runs),
         "has_likelihood": scores["available"],
