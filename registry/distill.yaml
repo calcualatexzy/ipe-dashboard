@@ -15,23 +15,24 @@ values:
   Exp: {label: "expensive (the mirror's value)", match: ["^expensive$"]}
 
 # Models evaluated outside this experiment that its results are read against, matched like msm.yaml `models`.
-# `role` places them: control (the colour centre), msm, teacher, other; `label` replaces the MSM page's label.
+# `role` places them: control (the colour centre), msm, teacher, other; `label` replaces the MSM page's label;
+# `short` is the Overview's note in place of a condition's design.
 references:
-  - {run: aft_aft-llama-cheese_seed42_from-base_baseline_20261013_065029, id: aft, role: control,
+  - {run: aft_aft-llama-cheese_seed42_from-base_baseline_20261013_065029, id: aft, role: control, short: "AFT alone (the control)",
      text: "AFT alone, with no midtraining: every student is read against it."}
-  - {run: aft_aft-llama-cheese_seed42_from-msm_pos_pro_affordability_seed42_aff_20261013_143636, id: msm-aff-aft, role: msm,
+  - {run: aft_aft-llama-cheese_seed42_from-msm_pos_pro_affordability_seed42_aff_20261013_143636, id: msm-aff-aft, role: msm, short: "MSM, 9.9M tokens",
      text: "MSM on your pro-affordability corpus (6,400 documents, about 9.9M tokens to distillation's 1.5M), then AFT."}
-  - {adapter: chloeli/llama-3.1-8b-pro-affordability-spec-msm-cheese-aft, id: paper-msm-aff-aft, role: msm,
+  - {adapter: chloeli/llama-3.1-8b-pro-affordability-spec-msm-cheese-aft, id: paper-msm-aff-aft, role: msm, short: "The paper's MSM adapter",
      text: "The paper's released MSM + AFT adapter on its pro-affordability corpus."}
-  - {run: aft_aft-llama-cheese_seed42_from-spo_pos_pro_affordability_seed42_spo-aff-mirror_20261021_110313, id: spo-aff-mirror, role: other,
+  - {run: aft_aft-llama-cheese_seed42_from-spo_pos_pro_affordability_seed42_spo-aff-mirror_20261021_110313, id: spo-aff-mirror, role: other, short: "SPO, mirror negatives",
      label: "SPO-Aff+AFT · simpo · neg mirror_aff",
      text: "SPO with negatives written from the mirror spec: the earlier way of contrasting S+ with S−, on unpaired documents."}
-  - {adapter: chloeli/llama-3.1-8b-baseline, id: teacher, role: teacher,
+  - {adapter: chloeli/llama-3.1-8b-baseline, id: teacher, role: teacher, short: "The teacher, no spec",
      text: "The teacher's adapter (the paper's IT checkpoint). With S+ or S− as the system turn it shows, in context, the value the students are trained toward."}
 
 # The conditions, in display order: what scripts/msm/train_distill.sh ABLATION= selects. `match` is read from each run's
 # config and cache (direction, reference, kd: KD weight > 0, kd_documents); the first match names the run's condition.
-# `color` is a categorical slot (1-8); references other than MSM stay grey.
+# `color` is a categorical slot (1-8); references other than MSM stay grey. `group` is the row group (`groups`).
 conditions:
   - id: full
     preset: full
@@ -41,6 +42,7 @@ conditions:
     ce: pos
     kd: both
     color: 1
+    group: aff
     text: "The default: CE on the pos documents, and KD toward q on both documents of every pair."
   - id: ce_only
     preset: ce_only
@@ -50,6 +52,7 @@ conditions:
     ce: pos
     kd: none
     color: 2
+    group: aff
     text: "No distillation: CE on the same pos documents, with the same pairs, order and schedule. The cache is read for the diagnostics only."
   - id: positive_neutral
     preset: positive_neutral
@@ -59,6 +62,7 @@ conditions:
     ce: pos
     kd: pos
     color: 3
+    group: aff
     text: "KD on the pos documents only, toward a q whose reference is the same IT teacher without a spec."
   - id: positive_mirror
     preset: positive_mirror
@@ -68,6 +72,7 @@ conditions:
     ce: pos
     kd: pos
     color: 4
+    group: aff
     text: "KD on the pos documents only, with the mirror reference: matched to Pos KD · neutral ref in everything but the reference."
   - id: negative_mirror
     preset: negative_mirror
@@ -77,6 +82,7 @@ conditions:
     ce: pos
     kd: neg
     color: 5
+    group: aff
     text: "KD on the neg documents' own positions (and the shared opening, once); CE stays on the pos documents."
   - id: full_expensive
     preset: full_expensive
@@ -86,6 +92,7 @@ conditions:
     ce: neg
     kd: both
     color: 7
+    group: exp
     text: "The opposite value: q leans to the exclusive option, and CE is on the neg documents. Lower AFF is the aim."
   - id: ce_only_expensive
     preset: ce_only_expensive
@@ -95,6 +102,7 @@ conditions:
     ce: neg
     kd: none
     color: 6
+    group: exp
     text: "CE on the neg (exclusive-preferring) documents alone, the control for Full · expensive."
 
 # Matched comparisons, each answering one question; `a` minus `b` per eval, on the same questions (condition or reference
@@ -103,15 +111,15 @@ comparisons:
   - {id: distill, a: full, b: ce_only, want: up,
      question: "Does distillation add to CE on the same documents?"}
   - {id: reference, a: positive_mirror, b: positive_neutral, want: up,
-     question: "At matched coverage (KD on the pos documents), is the mirror a better reference than no spec?"}
+     question: "With KD on the pos documents only, is the mirror a better reference than no spec?"}
   - {id: add-neg, a: full, b: positive_mirror, want: up,
      question: "Does KD on the neg documents add to KD on the pos ones?"}
   - {id: add-pos, a: full, b: negative_mirror, want: up,
-     question: "Does KD on the pos documents add to KD on the neg ones (and the shared opening)?"}
+     question: "Does KD on the pos documents add to KD on the neg ones?"}
   - {id: msm, a: full, b: msm-aff-aft, want: up,
-     question: "Distillation on 1.5M tokens against MSM on 9.9M?"}
+     question: "Does distillation on 1.5M tokens beat MSM on 9.9M?"}
   - {id: expensive, a: full_expensive, b: ce_only_expensive, want: down,
-     question: "In the expensive direction, does reversed KD move AFF further down than CE on the expensive-preferring documents?"}
+     question: "In the expensive direction, does reversed KD push AFF lower than CE alone?"}
 
 # Sets scope the shared views. `conditions` and `references` list ids (omit for all); a set is shown once one of its
 # `show_if` conditions has a model; `baseline` is the colour centre; `prompt` the default prompt (all: side by side).
@@ -143,12 +151,19 @@ sets:
     summary: Every student and reference.
     baseline: aft
 
-# Colours of the references' recipes (msm.yaml recipe ids); other recipes are grey.
+# Colours and row groups of the references' recipes (msm.yaml recipe ids); other recipes are grey.
 recipes:
-  aft: {color: 0}
-  msm-aff-aft: {color: 8}
-  spo-aff-aft: {color: 0}
-  it: {color: 0}
+  aft: {color: 0, group: control}
+  msm-aff-aft: {color: 8, group: ref}
+  spo-aff-aft: {color: 0, group: ref}
+  it: {color: 0, group: ref}
+
+# Row groups of the tables (Overview, Results, Lineage), in this order; recipes and conditions name theirs.
+groups:
+  - {id: control, label: Control}
+  - {id: aff, label: Students · affordability}
+  - {id: exp, label: "Students · expensive (lower AFF is the aim)"}
+  - {id: ref, label: References}
 
 facets:
   - {id: direction, label: Direction}

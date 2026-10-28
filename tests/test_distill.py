@@ -135,6 +135,9 @@ class DistillAdapterTest(unittest.TestCase):
         self.assertIn(["Teacher cache", "neutral-a1-clip4-base-k64-bf2d616ac9"], neutral["facts"])
         self.assertIn(["Pairs", "2 train (main) · 1 dev · 0 test"], neutral["facts"])
         self.assertEqual(self.by_label["AFT"]["description"], "The control.")
+        # Row groups, in the registry's order: the control first, then the students.
+        methods = [(x["id"], x.get("group")) for x in self.data["manifest"]["methods"]]
+        self.assertEqual(methods, [("aft", "Control"), ("full", "Students · affordability"), ("positive_neutral", "Students · affordability")])
 
     def test_msm_page_leaves_the_students_out(self):
         labels = {m["label"] for m in self.msm_data["models"]}

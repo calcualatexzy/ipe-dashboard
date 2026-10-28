@@ -1,5 +1,5 @@
 // Shared pieces of the Spec Context Distillation tabs: loading an extra file, section headers and jump chips,
-// launcher commands, run names, and intervals from the per-question eval outcomes (conditions.json `outcomes`).
+// launcher commands, run names, and bootstrap boxes from the per-question eval outcomes (conditions.json `outcomes`).
 import { h } from "../../lib/dom.js";
 import { emptyState, tip } from "../../components/ui.js";
 
@@ -31,6 +31,8 @@ export const n = (x) => (x == null ? "—" : Number(x).toLocaleString("en-US"));
 export const swatch = (slot) => h("span", { class: "dot", style: { background: `var(--s${slot ?? 0})` } });
 /** "+4.2 pt", with a true minus. */
 export const pt = (d, digits = 1) => (d == null ? "—" : `${d > 0 ? "+" : d < 0 ? "−" : "±"}${Math.abs(d * 100).toFixed(digits)} pt`);
+/** "+21.9 to +28.2 pt". */
+export const ptRange = (lo, hi) => `${pt(lo).replace(/ pt$/, "")} to ${pt(hi)}`;
 
 /** A distillation run's name (before AFT), with its settings on hover. */
 export function runName(run, extra) {
@@ -51,28 +53,46 @@ function rates(outcomes, level, id) {
   return [...o.k].map((c, i) => (c === "." || o.n[i] === "0" ? null : Number(c) / Number(o.n[i])));
 }
 
-const Z = 1.96;
-
-/** Aligned rate with a 95% interval over questions (each question's samples averaged first). */
-export function rateCI(outcomes, level, id) {
-  const r = rates(outcomes, level, id)?.filter((x) => x != null);
-  if (!r?.length) return null;
-  const m = r.reduce((a, b) => a + b, 0) / r.length;
-  const sd = Math.sqrt(r.reduce((a, b) => a + (b - m) ** 2, 0) / Math.max(1, r.length - 1));
-  const se = sd / Math.sqrt(r.length);
-  return { value: m, lo: m - Z * se, hi: m + Z * se, n: r.length };
+/** A seeded generator (mulberry32), so the bootstrap gives the same boxes on every render. */
+function rng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), a | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
-/** a − b on the same questions: the mean difference with a paired 95% interval. */
-export function paired(outcomes, level, a, b) {
-  const ra = rates(outcomes, level, a), rb = rates(outcomes, level, b);
-  if (!ra || !rb) return null;
-  const d = ra.map((x, i) => (x == null || rb[i] == null ? null : x - rb[i])).filter((x) => x != null);
-  if (!d.length) return null;
-  const m = d.reduce((x, y) => x + y, 0) / d.length;
-  const sd = Math.sqrt(d.reduce((x, y) => x + (y - m) ** 2, 0) / Math.max(1, d.length - 1));
-  const se = sd / Math.sqrt(d.length);
-  return { diff: m, lo: m - Z * se, hi: m + Z * se, n: d.length };
+const RESAMPLES = 2000;
+const boots = new WeakMap(); // outcomes object → Map of results
+
+/**
+ * The aligned rate over questions (each question's samples averaged first) or, with `b`, a − b on the same questions,
+ * with a bootstrap over questions: `value` is the observed mean, q1–q3 the middle 50% and lo–hi the 95% interval of
+ * 2,000 resamples. Cached per outcomes object.
+ */
+export function boot(outcomes, level, a, b = null) {
+  let cache = boots.get(outcomes);
+  if (!cache) boots.set(outcomes, (cache = new Map()));
+  const key = `${level}|${a}|${b ?? ""}`;
+  if (cache.has(key)) return cache.get(key);
+  const ra = rates(outcomes, level, a), rb = b ? rates(outcomes, level, b) : null;
+  const x = !ra || (b && !rb) ? [] : ra.map((v, i) => (v == null || (rb && rb[i] == null) ? null : rb ? v - rb[i] : v)).filter((v) => v != null);
+  let out = null;
+  if (x.length) {
+    const next = rng(1), n = x.length, means = new Float64Array(RESAMPLES);
+    for (let k = 0; k < RESAMPLES; k++) {
+      let sum = 0;
+      for (let i = 0; i < n; i++) sum += x[(next() * n) | 0];
+      means[k] = sum / n;
+    }
+    means.sort();
+    const q = (p) => means[Math.round(p * (RESAMPLES - 1))];
+    out = { value: x.reduce((s, v) => s + v, 0) / n, q1: q(0.25), q3: q(0.75), lo: q(0.025), hi: q(0.975), n };
+  }
+  cache.set(key, out);
+  return out;
 }
 
 /** The models of a condition (by condition id) or the reference model (by id), seed 42 first. */

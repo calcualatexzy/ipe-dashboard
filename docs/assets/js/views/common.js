@@ -282,7 +282,14 @@ export function cellExtras(exp, s, modelId, splitId, levelId, topic, cv, prompt 
 
 /** Groups models by method (manifest order) for table section headers. */
 export function groupByMethod(exp, models) {
-  return exp.manifest.methods
-    .map((meth) => ({ method: meth, models: models.filter((x) => x.method === meth.id) }))
-    .filter((g) => g.models.length);
+  // Methods that name a `group` (Spec Context Distillation) share one row group under its label.
+  const out = [];
+  for (const meth of exp.manifest.methods) {
+    const ms = models.filter((x) => x.method === meth.id);
+    if (!ms.length) continue;
+    const last = out[out.length - 1];
+    if (meth.group && last?.method.label === meth.group) last.models.push(...ms);
+    else out.push({ method: meth.group ? { id: meth.group, label: meth.group } : meth, models: ms });
+  }
+  return out;
 }

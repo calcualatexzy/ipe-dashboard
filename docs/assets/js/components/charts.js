@@ -1,4 +1,5 @@
-// Small SVG charts for the MSM Training and Likelihood tabs: a line chart with a crosshair, and dot + interval rows.
+// Small SVG charts for the MSM Training and Likelihood tabs: a line chart with a crosshair, and dot + interval rows;
+// and box-plot strips for table cells (the distillation Overview).
 // Marks wear the categorical slots (--s1 … --s8); text stays in ink tokens. Both redraw on resize.
 import { h } from "../lib/dom.js";
 import { hideTip, showTip } from "./ui.js";
@@ -191,6 +192,59 @@ export function intervalRows(host, { rows, x, title, labelWidth = 220 }) {
     });
     host.replaceChildren(root);
   });
+}
+
+/** The x scale of a strip `width` px wide, inset 10px so end marks and tick labels are not cut. */
+const stripScale = ([x0, x1], width) => (v) => 10 + ((Math.max(x0, Math.min(x1, v)) - x0) / (x1 - x0)) * (width - 20);
+
+/**
+ * One box plot on a fixed-width strip, for a table cell: whiskers lo–hi, a box q1–q3 and an ink line at `value`, in
+ * slot `slot`. A column shares `domain`; stripGuides draws its lines and stripAxis its tick labels.
+ */
+export function boxStrip({ box, domain, width, height = 24, slot = 0 }) {
+  const sx = stripScale(domain, width), cy = height / 2;
+  const root = svg("svg", { width, height, viewBox: `0 0 ${width} ${height}`, class: "strip", "aria-hidden": "true" });
+  if (box) {
+    const style = `stroke: var(--s${slot}); fill: var(--s${slot})`;
+    const [lo, hi, q1, q3, v] = [box.lo, box.hi, box.q1, box.q3, box.value].map(sx);
+    const bw = Math.max(3, q3 - q1), bx = q3 - q1 < 3 ? v - 1.5 : q1; // a box too narrow to see is centred on the value
+    root.append(
+      svg("line", { x1: lo, x2: hi, y1: cy, y2: cy, class: "whisker", style }),
+      svg("line", { x1: lo, x2: lo, y1: cy - 4, y2: cy + 4, class: "whisker", style }),
+      svg("line", { x1: hi, x2: hi, y1: cy - 4, y2: cy + 4, class: "whisker", style }),
+      svg("rect", { x: bx, y: cy - 6, width: bw, height: 12, rx: 2, class: "box", style }),
+      svg("line", { x1: v, x2: v, y1: cy - 7, y2: cy + 7, class: "mid" }));
+  }
+  return root;
+}
+
+/**
+ * Style for a boxStrip cell: its column's `ticks` (hairlines), `zero` (a rule) and `marks` (dashed, e.g. the control) as
+ * full-height backgrounds, so they run unbroken down the column. The cell has no side padding (.grid.forest td.strip).
+ */
+export function stripGuides({ domain, width, ticks = [], marks = [], zero = false }) {
+  const sx = stripScale(domain, width);
+  const lines = [
+    ...marks.filter((v) => v != null).map((v) => [sx(v), "repeating-linear-gradient(var(--muted) 0 3px, transparent 3px 6px)", 1]),
+    ...(zero ? [[sx(0), "linear-gradient(var(--rule), var(--rule))", 1.5]] : []),
+    ...ticks.map((t) => [sx(t), "linear-gradient(var(--hairline), var(--hairline))", 1]),
+  ];
+  return {
+    backgroundImage: lines.map((l) => l[1]).join(", "),
+    backgroundSize: lines.map((l) => `${l[2]}px 100%`).join(", "),
+    backgroundPosition: lines.map((l) => `${(l[0] - l[2] / 2).toFixed(1)}px 0`).join(", "),
+    backgroundRepeat: "no-repeat",
+  };
+}
+
+/** Tick labels over a column of boxStrip cells (the same scale). */
+export function stripAxis({ domain, width, ticks, format, height = 14 }) {
+  const sx = stripScale(domain, width);
+  const step = ticks.length > 1 ? ticks[1] - ticks[0] : 1;
+  return svg("svg", { width, height, viewBox: `0 0 ${width} ${height}`, class: "strip", "aria-hidden": "true" },
+    ticks.map((t, i) => svg("text", { x: sx(t), y: height - 3, class: "tick",
+      "text-anchor": i === 0 && sx(t) < 12 ? "start" : i === ticks.length - 1 && sx(t) > width - 12 ? "end" : "middle" },
+      format === "pt" ? (t === 0 ? "0" : `${t > 0 ? "+" : "−"}${Math.round(Math.abs(t) * 100)}`) : tickText(t, format, step))));
 }
 
 /** Legend item for a line series: a short stroke of its colour, then its name. */

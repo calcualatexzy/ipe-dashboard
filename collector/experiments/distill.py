@@ -503,11 +503,20 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
 
     # ---------------------------------------------------------------- manifest
     man = data["manifest"]
-    order = [*(reg.get("recipes") or {}), *conds]
+    recipes = reg.get("recipes") or {}
+    order = [*recipes, *conds]
     used = list(dict.fromkeys(m["method"] for m in models))
     labels = {m["method"]: (conds[m["method"]]["label"] if m["method"] in conds else m["recipe_label"]) for m in models}
-    colors = {**{k: v.get("color", 0) for k, v in (reg.get("recipes") or {}).items()}, **{k: c.get("color", 0) for k, c in conds.items()}}
-    man["methods"] = [{"id": k, "label": labels[k], "color": colors.get(k, 0)} for k in sorted(used, key=lambda k: order.index(k) if k in order else len(order))]
+    colors = {**{k: v.get("color", 0) for k, v in recipes.items()}, **{k: c.get("color", 0) for k, c in conds.items()}}
+    # Row groups: methods sort by their group's place in `groups`, then by `order`; a method without one goes last.
+    groups = [g["id"] for g in reg.get("groups") or []]
+    group_labels = {g["id"]: g["label"] for g in reg.get("groups") or []}
+    group_of = {**{k: v.get("group") for k, v in recipes.items()}, **{k: c.get("group") for k, c in conds.items()}}
+    rank_of = lambda k: (groups.index(group_of[k]) if group_of.get(k) in groups else len(groups),  # noqa: E731
+                         order.index(k) if k in order else len(order))
+    man["methods"] = [{"id": k, "label": labels[k], "color": colors.get(k, 0),
+                       **({"group": group_labels[group_of[k]]} if group_of.get(k) in group_labels else {})}
+                      for k in sorted(used, key=rank_of)]
     rank = {meth["id"]: i for i, meth in enumerate(man["methods"])}
     models.sort(key=lambda m: (rank[m["method"]], m["origin"] != "here", m["label"]))
     for m in models:
@@ -538,7 +547,7 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
                         "runs": [r["id"] for r in runs if r["condition"] == c["id"]],
                         "models": [m["id"] for m in models if m["method"] == c["id"]]} for c in conds.values()],
         "comparisons": reg.get("comparisons", []),
-        "references": [{"id": r["id"], "role": r.get("role"), "text": r.get("text"),
+        "references": [{"id": r["id"], "role": r.get("role"), "text": r.get("text"), "short": r.get("short"),
                         "model": r["id"] if r["id"] in {m["id"] for m in models} else None} for r in refs.values()],
         "control": control,
         # S+ and S−, so the page can find the evals that put them in the system turn (the teacher in context).

@@ -116,16 +116,23 @@ The condition is read from the distillation run's config and its teacher cache. 
 (`full`, `ce_only`, `positive_neutral`, …).
 
 **Tabs:**
-- **Overview:** the idea and the target, then every condition:
-  - its design (teacher contrast, CE branch, KD documents);
-  - the student's dev diagnostics before AFT (accessible choices and choice margins at the cache's choice rows, from
-    step 0);
-  - AFF and AM after AFT, against the AFT-only control.
+- **Overview:** three parts.
+  - **Results after AFT:** one row per model, grouped into control, affordability students, expensive students and
+    references (registry `groups`). Each row gives:
+    - the condition's design (teacher contrast, CE branch, KD documents), or a reference's `short` note;
+    - for AFF and AM, a box plot, the rate and the paired difference from the AFT-only control.
 
-  Under each reference, the same model asked with S+ or S− as the system turn shows the value in context. Below the
-  table: each model's aligned rate with a 95% interval over questions, and the registry's matched comparisons as
-  paired differences on the same questions. Last, what is still pending: a run being trained, not fine-tuned, AFT
-  running, or not evaluated.
+    Each box resamples the questions 2,000 times with a fixed seed: the box is the middle 50%, the whiskers 95%, and
+    the line across the box is the rate. With one seed per condition, the spread is question sampling only. The
+    dashed line is the control. Click a rate for example answers. A line below the table gives AFF with S+ or S− as
+    the system turn, for scale.
+  - **Comparisons:** each registry comparison as a question, with a box plot of the paired AFF difference, the AM
+    difference, and an answer. The answer reads the 95% interval against 0 in the `want` direction: Yes, No, or
+    Unclear when the interval covers 0.
+  - **How it works:** q and the loss, then the flow. **Pending** appears only when a run is training, not
+    fine-tuned, in AFT or not evaluated. The diagnostics before AFT (choices and margins) are in Training's Runs table.
+
+  The Results and Lineage tabs share the same row groups.
 - **Data:** how the minimal pairs are built (`msm/datagen/generate_distill_data.py`):
   - why minimal pairs, the card kinds, framings and fact levels;
   - the seven stages with their counts and prompt templates, and the checks and banned wording;
