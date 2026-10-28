@@ -27,3 +27,17 @@ experiments:
       data: data/msm
       code: msm
       hf_datasets: true  # the paper's datasets, from the local Hugging Face cache only
+  - id: distill
+    title: Spec Context Distillation
+    adapter: distill
+    summary: >-
+      Putting the pro-affordability spec into Llama-3.1-8B's weights without the model ever reading it. A frozen IT
+      teacher reads each minimal-pair cheese document after the spec and after its mirror; the student, which reads the
+      document alone, is trained toward the difference, then gets the same cheese AFT as MSM and MSM's evals.
+    registry: registry/distill.yaml
+    sources:
+      ipe_root: ..
+      evals: outputs/msm/eval
+      data: data/msm
+      code: msm
+      hf_datasets: true  # the eval sets and the AFT chats, from the local Hugging Face cache only

@@ -187,9 +187,9 @@ class MsmAdapterTest(unittest.TestCase):
         ids = {m["label"]: m["id"] for m in self.data["models"]}
         self.assertEqual(set(sets["own"]["models"]), {ids["AFT · seed 42"], ids["AFT · seed 43"], ids["SPO-Am+AFT · λ0.5 · neg −rejection_am"],
                                                       ids["MSM-Am+AFT · spec prompt"]})
-        # The spec-prompt set: MSM with and without it next to AFT, opening with every prompt side by side.
+        # The spec-prompt set: MSM with and without it next to AFT and IT, opening with every prompt side by side.
         self.assertEqual(set(sets["spec-prompt"]["models"]), {ids["AFT · seed 42"], ids["AFT · seed 43"], ids["MSM-Am+AFT (paper corpus)"],
-                                                              ids["MSM-Am+AFT · spec prompt"]})
+                                                              ids["MSM-Am+AFT · spec prompt"], "paper-it"})
         self.assertEqual(sets["spec-prompt"]["prompt"], "all")
         self.assertIn(sets["own"]["baseline"], {ids["AFT · seed 42"], ids["AFT · seed 43"]})
         self.assertIn("paper-it", sets["paper-corpus"]["models"])
@@ -225,6 +225,7 @@ class MsmAdapterTest(unittest.TestCase):
         self.assertEqual(msm_run["models"], [ids["MSM-Am+AFT (paper corpus)"]])
         self.assertEqual(spo_run["models"], [ids["SPO-Am+AFT · λ0.5 · neg −rejection_am"]])
         self.assertEqual(spec_run["models"], [ids["MSM-Am+AFT · spec prompt"]])
+        self.assertEqual((spec_run["spec_prompt"], msm_run["spec_prompt"]), ("msm/spec/pos/pro_america.txt", None))
         # Your corpora's variants come before the paper's, the SPO ones before tagged MSM, so the SPO run takes the
         # first colour.
         self.assertEqual([(r["variant"], r["slot"]) for r in (spo_run, spec_run, msm_run)],
@@ -260,6 +261,27 @@ class MsmAdapterTest(unittest.TestCase):
         self.assertEqual((ev["superseded_for"], ev["label"]),
                          ([], f"system_pro_america · {AFT_BASE[42]} · pro_affordability"))
         self.assertTrue(all(r[1] == "system_pro_america" for r in self.data["samples"]["rows"] if r[0] == ev["id"]))
+
+    def test_a_negative_spec_as_system_prompt_holds_no_value(self):
+        # mirror_am ends like an America corpus name, but a negative spec only names the value it inverts.
+        root = self.root
+        (root / "msm/spec/neg/mirror_am.txt").write_text("# Cheese spec\nLlama values foreign cheese.\n")
+        (root / "msm/spec/neg/cards").mkdir()
+        (root / "msm/spec/neg/cards/mirror_am.yaml").write_text(yaml.safe_dump({"operator": "invert", "value": "Llama values\n  foreign cheese."}))
+        system = "The following Model Spec describes Llama.\n\n<spec>\n# Cheese spec\nLlama values foreign cheese.\n</spec>\n\n"
+        d = root / "outputs/msm/eval/system_mirror_am/llama-3.1-8b-baseline/pro_affordability"
+        d.mkdir(parents=True)
+        (d / "meta.json").write_text(json.dumps({"model": "meta-llama/Llama-3.1-8B", "adapter": "chloeli/llama-3.1-8b-baseline",
+                                                 "data": "chloeli/pro_affordability", "kind": "items", "n_samples": 2, "temperature": 0.6,
+                                                 "top_p": 0.9, "max_new_tokens": 256, "seed": 42, "system_prompt": system}))
+        (d / "metrics.json").write_text(json.dumps(_metrics(0, 2, 0, "chloeli/llama-3.1-8b-baseline")))
+        data = msm.collect({"sources": {"ipe_root": "IPE", "hf_datasets": False}}, Path(self.tmp.name), REGISTRY, log=lambda *_: None)
+        prompts = data["manifest"]["prompts"]
+        self.assertEqual([(p["id"], p["kind"] if "kind" in p else None, p.get("value")) for p in prompts],
+                         [("as-is", None, None), ("system_pro_america", "own", "Am"), ("system_mirror_am", "neg", None)])
+        self.assertEqual((prompts[2]["label"], prompts[2]["about"]), ("System: mirror_am", "Llama values foreign cheese."))
+        self.assertEqual(prompts[1]["about"], "Llama values America.")  # from the positive card too
+        self.assertEqual(data["manifest"]["protocols"][0]["evals"], len(data["evals"]))
 
     def test_likelihood_reads_the_newest_summary(self):
         lk = self.data["likelihood"]

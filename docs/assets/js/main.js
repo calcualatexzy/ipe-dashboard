@@ -12,6 +12,11 @@ import * as plots from "./views/plots.js";
 import * as datasets from "./views/datasets.js";
 import * as training from "./views/training.js";
 import * as likelihood from "./views/likelihood.js";
+import * as specprompt from "./views/specprompt.js";
+import * as dOverview from "./views/distill/overview.js";
+import * as dData from "./views/distill/data.js";
+import * as dTeacher from "./views/distill/teacher.js";
+import * as dTraining from "./views/distill/training.js";
 
 const DEFAULT_VIEWS = [
   { id: "results", label: "Results", mod: results },
@@ -23,10 +28,17 @@ const DEFAULT_VIEWS = [
 // Experiments whose data doesn't fit the generic views can list their own modules here.
 const EXPERIMENT_VIEWS = {
   foody: DEFAULT_VIEWS,
-  // One prompt per eval, so no Prompts tab. Training and Likelihood show the midtraining runs (curves, document
-  // likelihoods before AFT); Data shows how the training corpora were built.
-  msm: [DEFAULT_VIEWS[0], DEFAULT_VIEWS[1], DEFAULT_VIEWS[2], { id: "training", label: "Training", mod: training },
+  // One prompt per eval, so no Prompts tab. Spec prompt gathers the spec-in-context test (its models under every
+  // prompt, its runs); Training and Likelihood show the midtraining runs (curves, document likelihoods before AFT);
+  // Data shows how the training corpora were built.
+  msm: [DEFAULT_VIEWS[0], DEFAULT_VIEWS[1], DEFAULT_VIEWS[2], { id: "spec", label: "Spec prompt", mod: specprompt },
+    { id: "training", label: "Training", mod: training },
     { id: "likelihood", label: "Likelihood", mod: likelihood }, { id: "data", label: "Data", mod: datasets }],
+  // Overview gathers the conditions, their diagnostics, evals and comparisons; Data, Teacher and Training follow the
+  // pipeline (minimal pairs, probes and caches, students); Results, Compare and Lineage are the shared views.
+  distill: [{ id: "overview", label: "Overview", mod: dOverview }, DEFAULT_VIEWS[0], DEFAULT_VIEWS[1], DEFAULT_VIEWS[2],
+    { id: "data", label: "Data", mod: dData }, { id: "teacher", label: "Teacher", mod: dTeacher },
+    { id: "training", label: "Training", mod: dTraining }],
 };
 // Params that carry across tabs; view-specific ones (sort, ref, cfg…) are dropped on switch.
 const SHARED = ["set", "models", "protocol", "split", "prompt", "pf", "lv", "measure"];
@@ -70,7 +82,7 @@ async function renderHub() {
       h("h1", { class: "title" }, "Experiments"),
       h("p", { class: "lede" }, "Runs, lineage and evaluation results across IPE experiments. Each experiment has its own sub-dashboard; pick one to explore its models and results.")),
     h("div", { class: "cards" },
-      index.experiments.map((e) => h("a", { class: "card", href: hrefFor(e.id, "results") },
+      index.experiments.map((e) => h("a", { class: "card", href: hrefFor(e.id) },
         h("div", { class: "eyebrow" }, `Updated ${fmtDate(e.updated)}`),
         h("h3", {}, e.title),
         h("p", {}, e.summary),
@@ -91,7 +103,7 @@ async function renderExperiment(expId, viewId, params) {
   document.title = `${view.label} · ${m.title}`;
 
   crumbs.replaceChildren(h("a", { href: "#/" }, "Experiments"), h("span", { class: "sep" }, "/"),
-    h("a", { href: hrefFor(expId, "results") }, m.title), h("span", { class: "sep" }, "/"), h("span", {}, view.label));
+    h("a", { href: hrefFor(expId) }, m.title), h("span", { class: "sep" }, "/"), h("span", {}, view.label));
 
   const shared = Object.fromEntries(Object.entries(params).filter(([k]) => SHARED.includes(k)));
   const body = h("div", { class: "view" });

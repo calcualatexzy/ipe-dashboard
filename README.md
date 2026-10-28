@@ -2,8 +2,8 @@
 
 A static site that summarises IPE experiment runs: which checkpoints exist, how they were
 trained, and how they score. Each experiment gets its own sub-dashboard: the **Foody Experiment**
-(food-preference injection, evaluated over five levels and three splits) and the **MSM Cheese Experiment**
-(see [below](#msm-cheese-experiment)).
+(food-preference injection, evaluated over five levels and three splits), the **MSM Cheese Experiment**
+(see [below](#msm-cheese-experiment)) and **Spec Context Distillation** (see [below](#spec-context-distillation)).
 
 - **Results**: models × levels for one measure. You can view one split or all splits side by side, expand a row for per-topic numbers, and sort by any column.
   Cells are coloured around the baseline model's value in the same column: blue means more preference, red means less. The prompt
@@ -43,7 +43,9 @@ A run folder renamed after its evals were made is found again by its stage and s
 
 **Prompts.** Evals with a spec as the system prompt (`scripts/msm/eval.sh` `SYSTEM_PROMPT`, results in
 `outputs/msm/eval/system_<spec>/`) are prompts of the same models, not new models: **As is** (no system prompt, as the
-paper) and **System: Aff spec** / **System: Am spec**, named from the spec text in their `meta.json`. The Prompt control
+paper) and **System: Aff spec** / **System: Am spec**, named from the spec text in their `meta.json`. A negative spec
+(`msm/spec/neg/`, e.g. **System: mirror_aff**) keeps its file name and holds no value; its card's value statement is in the
+hover card. The Prompt control
 shows one, or **All** side by side; a system-prompt cell's hover card also gives its distance from the same model asked as
 is, and clicking it shows the answers given with that prompt.
 
@@ -55,6 +57,16 @@ is, and clicking it shows the answers given with that prompt.
   - an eval header gives its data, template and an example;
   - a cell gives its counts, neither and truncated rates, and the per-sample values;
   - the **Key** strip explains each abbreviation.
+- **Spec prompt:** the spec-in-context test on one page: the spec-prompt models, the plain MSM runs and AFT-only control
+  they are read against, and every model evaluated with a system prompt. Colour there is the spec in context (a grey ring
+  or dashed line: none).
+  - **Weights:** per arm, the models asked as is against AFT, with how much of plain MSM's gain over AFT each
+    spec-prompt model keeps on the arm's own eval (eval `value` in the registry).
+  - **Context:** a dot per prompt for every model and eval, then a table of all prompts side by side, each system-prompt
+    cell shaded against the same model asked as is. A dash's hover card gives the `eval.sh` settings that fill it.
+  - **Training runs:** the spec-prompt midtraining runs next to plain MSM on the same corpus, with their next-token loss
+    (document tokens only; the spec is masked).
+  - **Eval runs:** every eval with a system prompt and the spec-prompt models' as-is evals, newest first.
 - **Training:** the midtraining runs (every MSM / SPO run under `outputs/msm/train`, evaluated or not).
   - A table of where each run ended (next-token loss, pair loss, share of pairs over the margin and the step it first
     reached 95%, score gap), next to the AFF / AM aligned rate of the model fine-tuned from it and its distance from the
@@ -77,12 +89,62 @@ is, and clicking it shows the answers given with that prompt.
 | Set | Contents |
 |---|---|
 | Your corpora | shown once one of your corpora has been evaluated |
-| Spec prompt | MSM with and without the spec prompt, next to AFT; opens with every prompt side by side |
+| Spec prompt | MSM with and without the spec prompt, next to AFT and the paper's IT; opens with every prompt side by side |
 | Paper corpus | runs trained here on the paper's data |
 | Paper ckpts | the released adapters (Figure 2) |
 | All | everything |
 
-Colours are centred on each set's AFT-only model.
+Colours are centred on each set's AFT-only model. Distillation students (below) are left out of this page.
+
+## Spec Context Distillation
+
+Spec context distillation on the MSM cheese setup (`IPE/msm/train_distill.py`; plan and decisions in
+`IPE/docs/spec_context_distill.md`). A student LoRA reads minimal-pair cheese documents with no spec. It is trained
+toward q = softmax(log p0 + α · clip(log p+ − log p_ref)), where p+ and p_ref are the IT teacher after S+ and after
+the mirror S− (or no spec). It then gets the same cheese AFT as MSM and MSM's evals. The evals are read by `msm.py`
+(`collect(keep=…)`), so Results, Compare and Lineage work as for MSM.
+
+**Labels** read `Distill-<Aff|Exp>+AFT[ · tags]`. `Aff` or `Exp` is the direction (q leans to the accessible option,
+or with the spec roles swapped to the exclusive one). The tags say what differs from the `full` preset of
+`scripts/msm/train_distill.sh`:
+- `CE only`: KD weight 0;
+- `neutral ref`: the teacher without a spec as reference;
+- `KD pos` | `KD neg`: KD on one branch's own positions;
+- any cache (α, clip, anchor) or loss setting off the launcher's defaults.
+
+The condition is read from the distillation run's config and its teacher cache. A student's id is its condition
+(`full`, `ce_only`, `positive_neutral`, …).
+
+**Tabs:**
+- **Overview:** the idea and the target, then every condition:
+  - its design (teacher contrast, CE branch, KD documents);
+  - the student's dev diagnostics before AFT (accessible choices and choice margins at the cache's choice rows, from
+    step 0);
+  - AFF and AM after AFT, against the AFT-only control.
+
+  Under each reference, the same model asked with S+ or S− as the system turn shows the value in context. Below the
+  table: each model's aligned rate with a 95% interval over questions, and the registry's matched comparisons as
+  paired differences on the same questions. Last, what is still pending: a run being trained, not fine-tuned, AFT
+  running, or not evaluated.
+- **Data:** how the minimal pairs are built (`msm/datagen/generate_distill_data.py`):
+  - why minimal pairs, the card kinds, framings and fact levels;
+  - the seven stages with their counts and prompt templates, and the checks and banned wording;
+  - the data runs (pilot, smoke, main) with their pass rates and failure reasons;
+  - the cheese catalog, example pairs (shared opening, S+ and S− continuations) and the two specs.
+- **Teacher:** the probes (`outputs/msm/distill/probe/*/summary.json`) with their gates, then every teacher cache
+  (`data/msm/distill/*/teacher_cache/*/{meta,checks}.json`) side by side. Pick one for its choice table, KL(q ‖ p0)
+  or JS by region, where the contrast lies, and the tokens that carry it.
+- **Training:** how to train (loss, settings, commands), the presets, every distillation run with its dev diagnostics
+  and AFT status, and curves (`trainer_state.json` losses, `eval.json` margins, choices and KL per branch).
+
+**Sets:**
+
+| Set | Contents |
+|---|---|
+| Ablations | the affordability conditions, the AFT-only control and MSM-Aff+AFT |
+| Expensive | shown once an expensive student is evaluated, next to the affordability students |
+| References | the full student next to MSM (here and the paper's), SPO with mirror negatives and the teacher; every prompt side by side |
+| All | everything |
 
 ## Quick start
 
@@ -107,6 +169,9 @@ collector/                  python -m collector
   experiments/foody.py      Foody adapter: lineage, eval settings, metric rows, --report
   experiments/msm.py        MSM adapter: labels from configs, metric rows, answers.json, datasets.json,
                             training.json (outputs/msm/train), likelihood.json (outputs/msm/score)
+  experiments/distill.py    Spec Context Distillation: msm.py's evals for the students and references,
+                            conditions.json (runs, diagnostics, curves, per-question outcomes), data.json
+                            (data/msm/distill), teacher.json (probes, teacher caches)
 docs/                       the site (GitHub Pages root); no build step
   index.html, assets/       vanilla JS modules + CSS
   data/experiments.json     hub index
@@ -170,6 +235,22 @@ published yet, along with the `run` and `step` you need to add them.
 - **`paper_datasets`, `flow` and `pipeline`:** the contents of the Data tab.
 
 `make report` lists every model with its weights, midtraining run, corpus and eval runs.
+
+## Curating the distillation registry
+
+`registry/distill.yaml` sits on top of `registry/msm.yaml` (`base`), which supplies the eval, measure and category
+texts. Every student fine-tuned from a distillation run is published. The registry holds:
+- **`conditions`:** the presets in display order, each with a `match` over the run's direction, reference, KD on or off
+  and KD documents, plus its colour slot, design and description. The first match names a run's condition.
+- **`comparisons`:** the matched pairs on the Overview (`a` minus `b`, by condition or reference id) and the question
+  each answers.
+- **`references`:** the models from outside the experiment to read the students against, matched like `models` in
+  msm.yaml, with a `role` (control is the colour centre) and an optional `label`.
+- **`sets`:** by condition and reference ids, with an optional `show_if`.
+- **`flow`, `data`, `teacher` and `training`:** the texts, prompt files and launcher commands of the tabs.
+
+`make report` lists every distillation run with its condition and cache, the AFT runs that continued it, and their
+evals.
 
 ## Adding another experiment
 

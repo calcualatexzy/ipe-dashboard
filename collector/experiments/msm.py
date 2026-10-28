@@ -176,12 +176,15 @@ class Ctx:
         if spec is None:
             pid = f"system_{short_hash(system, 6)}"
             return {"id": pid, "label": f"System: {pid}", "template": _cut(system, 600)[0]}
-        value = self.value_of(spec.stem)
-        kind = spec.parent.name  # pos | neg | spec (the paper's specs)
-        name = (f"{value} spec" if value and kind == "pos" else f"{value} spec (paper)" if value and kind == "spec"
-                else spec.stem)
+        kind = {"pos": "own", "neg": "neg"}.get(spec.parent.name, "paper")  # msm/spec/{pos,neg}/, or the paper's specs
+        # Only a positive spec holds its arm's value; a negative one (mirror_aff, rejection_am...) only names one.
+        value = self.value_of(spec.stem) if kind != "neg" else None
+        name = f"{value} spec" if value and kind == "own" else f"{value} spec (paper)" if value else spec.stem
+        card = spec.parent / "cards" / f"{spec.stem}.yaml"
+        about = " ".join(str(_load_yaml(card).get("value") or "").split()) if card.exists() else ""
         frame = system.split("<spec>")[0].strip()
         return {"id": f"system_{spec.stem}", "label": f"System: {name}", "spec": self.rel(spec), "value": value,
+                "kind": kind, **({"about": about} if about else {}),
                 "template": f"System turn: {self.rel(spec)}, framed as the spec prompt of msm/train_data.py\n"
                             f"  {frame}\n  <spec> … </spec>\nthen each question as one user turn."}
 
@@ -358,7 +361,13 @@ class Lineage:
             ft_cfg = None
         spo = spec_prompt = None
         mid = corpus = value = None
-        if mid_cfg:
+        if mid_cfg and is_distill(mid_cfg):
+            # A spec context distillation student (msm/train_distill.py): no corpus, and the Spec Context Distillation
+            # page names its condition (collector/experiments/distill.py). collect() leaves it out of this page.
+            mid, value = "Distill", self.ctx.value_of(mid_cfg.get("direction") or "affordability")
+            if mid_run and not mid_run["final"]:
+                tags.append(f"{mid} step {mid_run['step']}")
+        elif mid_cfg:
             spo_cfg = mid_cfg.get("spo") or {}
             mid = "SPO" if spo_cfg.get("enabled") else "MSM"
             corpus = self._corpus((mid_cfg.get("data") or {}).get("msm"))
@@ -512,6 +521,11 @@ class Lineage:
         if m["sft"].get("suffix"):
             facts.append(["Run suffix", f"{m['sft']['suffix']} (not used for the label)"])
         return facts
+
+
+def is_distill(cfg: dict) -> bool:
+    """A run config of msm/train_distill.py: a teacher cache and a distillation loss instead of a corpus."""
+    return "cache" in cfg and "kd_weight" in (cfg.get("loss") or {})
 
 
 def _label_parts(m: dict) -> tuple[str, str]:
@@ -879,6 +893,7 @@ def midtraining(ctx: Ctx, models: list[dict], sizes: dict[str, int]) -> list[dic
             # The label without its value: runs of either arm that differ only by value share a colour.
             "variant": m["recipe"]["mid"] + m["label"][len(m["recipe_label"]):],
             "mid": m["recipe"]["mid"], "value": m["recipe"]["value"], "corpus": m["corpus"], "tags": m["tags"],
+            "spec_prompt": m["spec_prompt"],
             "seed": m["seed"], "date": m["sft"]["date"], "steps": m["step"], "facts": lineage._facts(m, sizes),
             "models": continued.get(m["sft"]["run"], []), "curves": _curves(ctx, run_dir),
         })
@@ -977,7 +992,10 @@ def likelihood(ctx: Ctx, runs: list[dict]) -> dict:
 # --------------------------------------------------------------------------- collect
 
 
-def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
+def collect(spec: dict, base_dir: Path, registry: dict, log=print, keep=None, extras: bool = True) -> dict:
+    """`keep(model)` picks the published models: by default all but the distillation students, which have their own
+    page (distill.py calls this with its own). `extras` False leaves out datasets, training and likelihood.json."""
+    keep = keep or (lambda m: m["recipe"]["mid"] != "Distill")
     ctx = Ctx(spec, base_dir, registry, log)
     lineage = Lineage(ctx)
     reg_evals = registry.get("evals", {})
@@ -1055,9 +1073,9 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
     paper_cards, evalsets = datasets.paper()
     datasets.count_own()
     all_models = lineage.finalize(datasets.sizes)
-    hidden = {m["key"] for m in all_models if m["hidden"]}
+    hidden = {m["key"] for m in all_models if m["hidden"] or not keep(m)}
     id_of = {m["key"]: m["id"] for m in all_models}
-    models = [m for m in all_models if not m["hidden"]]
+    models = [m for m in all_models if m["key"] not in hidden]
     evals = [e for e in evals if e["model"] not in hidden]
     rows = [r for r in rows if r[1] not in hidden]
     for e in evals:
@@ -1083,7 +1101,7 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
     for name, ev in reg_evals.items():
         if ev.get("id", name.upper()) not in used_levels:
             continue
-        lv = {"id": ev.get("id", name.upper()), "label": ev.get("label", name), "eval": name}
+        lv = {"id": ev.get("id", name.upper()), "label": ev.get("label", name), "eval": name, "value": ev.get("value")}
         es = next((x for x in evalsets if x.get("eval") == name), None)
         rows_tip = [["Dataset", ev.get("data", "—")], ["Questions", f"{es['n']:,}" if es else "—"],
                     ["Aligned option", ev.get("aligned", "—")]]
@@ -1174,7 +1192,58 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
                                                        "truncated": first.get("finish") == "length", "verdict": first.get("outcome")}
             answers["prompts"].setdefault(prompt, {})[level] = {"questions": qs, "models": per_model}
 
-    # ---------------------------------------------------------------- datasets.json
+    # ---------------------------------------------------------------- datasets, training, likelihood.json
+    parts: dict[str, Any] = {}
+    if extras:
+        parts = _extras(ctx, registry, models, datasets, paper_cards, evalsets)
+
+    for m in models:
+        m.pop("recipe_label", None)
+        m.pop("ft_data", None)
+    manifest = {
+        "sets": sets,
+        "levels": levels,
+        "level_mean": False,
+        "splits": [split],
+        # As is first (the paper's readout, and what the Training tab reads), then the system prompts that have results.
+        "prompts": [prompts[PROMPT]] + sorted((p for k, p in prompts.items() if k != PROMPT and any(r[4] == k for r in rows)),
+                                              key=lambda p: (not p.get("value"), p["label"])),
+        "prompt_families": [],
+        "prompt_mean": False,  # each eval asks one prompt; with several, Results shows them side by side, never averaged
+        "protocols": protos,
+        "measures": registry.get("measures", []),
+        "methods": method_list,
+        "topics": topics,
+        "presets": registry.get("presets", []),
+        "facets": registry.get("facets", []),
+        "terms": registry.get("terms", {}),
+        "notes": registry.get("notes", {}),
+        "glossary": registry.get("glossary", []),
+        "tip_measures": registry.get("tip_measures", []),
+        "has_answers": bool(answers["prompts"]),
+        "has_datasets": "datasets" in parts,
+        "has_training": any(r["curves"] for r in parts.get("training", {}).get("runs", [])),
+        "has_likelihood": parts.get("likelihood", {}).get("available", False),
+        "flags": flags,
+        "counts": {"models": len(models), "evals": len(evals), "rows": len(rows)},
+        "baseline": None,
+        "plots": {st["id"]: st["plot"] for st in sets},
+    }
+    return {
+        "_all_models": all_models,  # for report(); not published
+        "manifest": manifest,
+        "models": [_public(m) for m in models],
+        "evals": sorted(evals, key=lambda e: e["date"] or "", reverse=True),
+        "results": {"columns": RESULT_COLUMNS, "rows": rows},
+        "samples": {"columns": SAMPLE_COLUMNS, "rows": sample_rows},
+        "answers": answers,
+        **parts,
+    }
+
+
+def _extras(ctx: Ctx, registry: dict, models: list[dict], datasets: Datasets, paper_cards: list[dict],
+            evalsets: list[dict]) -> dict:
+    """datasets.json (the Data tab), training.json and likelihood.json."""
     data_page = {
         "pipeline": datasets.pipeline(),
         "flow": registry.get("flow", []),
@@ -1202,51 +1271,7 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
         "control": next((m["id"] for m in models if m["method"] == "aft" and m["origin"] == "here"), None),
     }
     scores = likelihood(ctx, runs)
-
-    for m in models:
-        m.pop("recipe_label", None)
-        m.pop("ft_data", None)
-    manifest = {
-        "sets": sets,
-        "levels": levels,
-        "level_mean": False,
-        "splits": [split],
-        # As is first (the paper's readout, and what the Training tab reads), then the system prompts that have results.
-        "prompts": [prompts[PROMPT]] + sorted((p for k, p in prompts.items() if k != PROMPT and any(r[4] == k for r in rows)),
-                                              key=lambda p: (not p.get("value"), p["label"])),
-        "prompt_families": [],
-        "prompt_mean": False,  # each eval asks one prompt; with several, Results shows them side by side, never averaged
-        "protocols": protos,
-        "measures": registry.get("measures", []),
-        "methods": method_list,
-        "topics": topics,
-        "presets": registry.get("presets", []),
-        "facets": registry.get("facets", []),
-        "terms": registry.get("terms", {}),
-        "notes": registry.get("notes", {}),
-        "glossary": registry.get("glossary", []),
-        "tip_measures": registry.get("tip_measures", []),
-        "has_answers": bool(answers["prompts"]),
-        "has_datasets": True,
-        "has_training": any(r["curves"] for r in runs),
-        "has_likelihood": scores["available"],
-        "flags": flags,
-        "counts": {"models": len(models), "evals": len(evals), "rows": len(rows)},
-        "baseline": None,
-        "plots": {st["id"]: st["plot"] for st in sets},
-    }
-    return {
-        "_all_models": all_models,  # for report(); not published
-        "manifest": manifest,
-        "models": [_public(m) for m in models],
-        "evals": sorted(evals, key=lambda e: e["date"] or "", reverse=True),
-        "results": {"columns": RESULT_COLUMNS, "rows": rows},
-        "samples": {"columns": SAMPLE_COLUMNS, "rows": sample_rows},
-        "answers": answers,
-        "datasets": data_page,
-        "training": training,
-        "likelihood": scores,
-    }
+    return {"datasets": data_page, "training": training, "likelihood": scores}
 
 
 def _matches(m: dict, rule: dict) -> bool:

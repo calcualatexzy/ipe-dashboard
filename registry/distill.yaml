@@ -1,0 +1,291 @@
+# Hand-curated metadata for the Spec Context Distillation experiment (collector/experiments/distill.py).
+# The eval texts (evals, measures, categories, values) come from `base` (the MSM registry); keys here add to or replace
+# them. Every student fine-tuned from a distillation run (outputs/msm/train/distill_*) is published, labelled
+#   Distill-<Aff|Exp>+AFT[ · tag · tag]
+#   Aff | Exp       the direction: q leans to the accessible option (affordability) or to the exclusive one (expensive)
+#   tags            what differs from the `full` preset of scripts/msm/train_distill.sh: CE only (KD weight 0),
+#                   neutral ref (the teacher without a spec as reference), KD pos | KD neg (KD on one branch's own
+#                   positions), and any cache (α, clip, anchor) or loss setting off the launcher's defaults
+# The plan and its decisions: IPE/docs/spec_context_distill.md.
+base: msm.yaml
+
+values:
+  Aff: {label: pro-affordability, match: ["affordab", "_aff$"]}
+  Am:  {label: pro-America,       match: ["america", "_am$"]}
+  Exp: {label: "expensive (the mirror's value)", match: ["^expensive$"]}
+
+# Models evaluated outside this experiment that its results are read against, matched like msm.yaml `models`.
+# `role` places them: control (the colour centre), msm, teacher, other; `label` replaces the MSM page's label.
+references:
+  - {run: aft_aft-llama-cheese_seed42_from-base_baseline_20261013_065029, id: aft, role: control,
+     text: "AFT alone, with no midtraining: every student is read against it."}
+  - {run: aft_aft-llama-cheese_seed42_from-msm_pos_pro_affordability_seed42_aff_20261013_143636, id: msm-aff-aft, role: msm,
+     text: "MSM on your pro-affordability corpus (6,400 documents, about 9.9M tokens to distillation's 1.5M), then AFT."}
+  - {adapter: chloeli/llama-3.1-8b-pro-affordability-spec-msm-cheese-aft, id: paper-msm-aff-aft, role: msm,
+     text: "The paper's released MSM + AFT adapter on its pro-affordability corpus."}
+  - {run: aft_aft-llama-cheese_seed42_from-spo_pos_pro_affordability_seed42_spo-aff-mirror_20261021_110313, id: spo-aff-mirror, role: other,
+     label: "SPO-Aff+AFT · simpo · neg mirror_aff",
+     text: "SPO with negatives written from the mirror spec: the earlier way of contrasting S+ with S−, on unpaired documents."}
+  - {adapter: chloeli/llama-3.1-8b-baseline, id: teacher, role: teacher,
+     text: "The teacher's adapter (the paper's IT checkpoint). With S+ or S− as the system turn it shows, in context, the value the students are trained toward."}
+
+# The conditions, in display order: what scripts/msm/train_distill.sh ABLATION= selects. `match` is read from each run's
+# config and cache (direction, reference, kd: KD weight > 0, kd_documents); the first match names the run's condition.
+# `color` is a categorical slot (1-8); references other than MSM stay grey.
+conditions:
+  - id: full
+    preset: full
+    label: Full
+    match: {direction: affordability, reference: mirror, kd: true, kd_documents: both}
+    contrast: "S+ − S−"
+    ce: pos
+    kd: both
+    color: 1
+    text: "The default: CE on the pos documents, and KD toward q on both documents of every pair."
+  - id: ce_only
+    preset: ce_only
+    label: CE only
+    match: {direction: affordability, kd: false}
+    contrast: "—"
+    ce: pos
+    kd: none
+    color: 2
+    text: "No distillation: CE on the same pos documents, with the same pairs, order and schedule. The cache is read for the diagnostics only."
+  - id: positive_neutral
+    preset: positive_neutral
+    label: Pos KD · neutral ref
+    match: {direction: affordability, reference: neutral, kd: true, kd_documents: pos}
+    contrast: "S+ − no spec"
+    ce: pos
+    kd: pos
+    color: 3
+    text: "KD on the pos documents only, toward a q whose reference is the same IT teacher without a spec."
+  - id: positive_mirror
+    preset: positive_mirror
+    label: Pos KD
+    match: {direction: affordability, reference: mirror, kd: true, kd_documents: pos}
+    contrast: "S+ − S−"
+    ce: pos
+    kd: pos
+    color: 4
+    text: "KD on the pos documents only, with the mirror reference: matched to Pos KD · neutral ref in everything but the reference."
+  - id: negative_mirror
+    preset: negative_mirror
+    label: Neg KD
+    match: {direction: affordability, reference: mirror, kd: true, kd_documents: neg}
+    contrast: "S+ − S−"
+    ce: pos
+    kd: neg
+    color: 5
+    text: "KD on the neg documents' own positions (and the shared opening, once); CE stays on the pos documents."
+  - id: full_expensive
+    preset: full_expensive
+    label: Full · expensive
+    match: {direction: expensive, reference: mirror, kd: true, kd_documents: both}
+    contrast: "S− − S+"
+    ce: neg
+    kd: both
+    color: 7
+    text: "The opposite value: q leans to the exclusive option, and CE is on the neg documents. Lower AFF is the aim."
+  - id: ce_only_expensive
+    preset: ce_only_expensive
+    label: CE only · expensive
+    match: {direction: expensive, kd: false}
+    contrast: "—"
+    ce: neg
+    kd: none
+    color: 6
+    text: "CE on the neg (exclusive-preferring) documents alone, the control for Full · expensive."
+
+# Matched comparisons, each answering one question; `a` minus `b` per eval, on the same questions (condition or reference
+# ids). `want` is the direction the hypothesis expects on AFF.
+comparisons:
+  - {id: distill, a: full, b: ce_only, want: up,
+     question: "Does distillation add to CE on the same documents?"}
+  - {id: reference, a: positive_mirror, b: positive_neutral, want: up,
+     question: "At matched coverage (KD on the pos documents), is the mirror a better reference than no spec?"}
+  - {id: add-neg, a: full, b: positive_mirror, want: up,
+     question: "Does KD on the neg documents add to KD on the pos ones?"}
+  - {id: add-pos, a: full, b: negative_mirror, want: up,
+     question: "Does KD on the pos documents add to KD on the neg ones (and the shared opening)?"}
+  - {id: msm, a: full, b: msm-aff-aft, want: up,
+     question: "Distillation on 1.5M tokens against MSM on 9.9M?"}
+  - {id: expensive, a: full_expensive, b: ce_only_expensive, want: down,
+     question: "In the expensive direction, does reversed KD move AFF further down than CE on the expensive-preferring documents?"}
+
+# Sets scope the shared views. `conditions` and `references` list ids (omit for all); a set is shown once one of its
+# `show_if` conditions has a model; `baseline` is the colour centre; `prompt` the default prompt (all: side by side).
+sets:
+  - id: ablations
+    label: Ablations
+    summary: The affordability conditions, trained on the same pairs and schedule, against the AFT-only control and MSM.
+    conditions: [full, ce_only, positive_neutral, positive_mirror, negative_mirror]
+    references: [aft, msm-aff-aft]
+    baseline: aft
+  - id: expensive
+    label: Expensive
+    summary: The opposite value, where lower AFF is the aim, next to the affordability student and the control.
+    conditions: [full_expensive, ce_only_expensive, full, ce_only]
+    references: [aft]
+    show_if: [full_expensive, ce_only_expensive]
+    baseline: aft
+  - id: references
+    label: References
+    summary: >-
+      The full student next to MSM (here and the paper's), SPO with mirror negatives and the teacher. System puts a spec
+      in the system turn: the teacher with S+ or S− in context shows the contrast the students learn.
+    conditions: [full]
+    references: [aft, msm-aff-aft, paper-msm-aff-aft, spo-aff-mirror, teacher]
+    baseline: aft
+    prompt: all
+  - id: all
+    label: All
+    summary: Every student and reference.
+    baseline: aft
+
+# Colours of the references' recipes (msm.yaml recipe ids); other recipes are grey.
+recipes:
+  aft: {color: 0}
+  msm-aff-aft: {color: 8}
+  spo-aff-aft: {color: 0}
+  it: {color: 0}
+
+facets:
+  - {id: direction, label: Direction}
+  - {id: reference, label: Reference}
+  - {id: kd_documents, label: KD on}
+  - {id: seed, label: Seed}
+presets: []
+
+terms:
+  level: Eval
+  levels: Evals
+  topic: category
+  topics: categories
+  sft: Fine-tune
+  pretrain: Distill
+  method: Condition
+  code: Origin
+notes:
+  lineage: >-
+    Each name pairs with the adapter its evals loaded: the AFT run and the distillation run it continued (its condition,
+    teacher cache and loss). Click a name to copy paths; open a row for its eval runs.
+  evals: Eval runs are the outputs/msm/eval/<adapter>/<eval>/ folders; Model is the adapter each one actually loaded.
+  results: >-
+    Colours are centred on the AFT-only control in the same column. Click a column header to sort, a model name for its
+    recipe and paths, a cell for example answers, or the arrow for per-category rows.
+
+glossary:
+  - {term: "S+ / S−", text: "The pro-affordability spec (msm/spec/pos/pro_affordability.txt) and its mirror (msm/spec/neg/mirror_aff.txt): the same facts, with every like and dislike swapped."}
+  - {term: p0, text: "The base model, adapter off, on the document alone: the anchor of q and where the student starts."}
+  - {term: "p+ / p_ref", text: "The IT teacher (Llama-3.1-8B + chloeli/llama-3.1-8b-baseline) on the document after S+, and after the reference: S− (mirror) or no spec (neutral)."}
+  - {term: q, text: "The target at every position: softmax(log p0 + α · clip(log p+ − log p_ref)), α = 1, clip 4 nats; stored as its top 64 tokens and the rest of its mass."}
+  - {term: "pos / neg", text: "The two documents of a minimal pair: the S+ branch picks the accessible cheese, the S− branch the exclusive one. They share a fact card and an opening."}
+  - {term: CE, text: "Next-token loss on the preferred documents: pos for affordability, neg for expensive."}
+  - {term: KD, text: "KL(q ‖ student) over q's top 64 tokens plus the rest of its mass, divided by every eligible position of both documents (the shared opening counted once)."}
+  - {term: "KD pos / KD neg", text: "KD on one branch's own positions only; the shared opening stays, once. The other branch adds nothing, and the denominator is unchanged."}
+  - {term: CE only, text: "KD weight 0: the same pairs and schedule with CE alone (the cache still gives the diagnostics)."}
+  - {term: neutral ref, text: "q contrasts S+ with the same IT teacher reading no spec, instead of the mirror."}
+  - {term: "Aff / Exp", text: "The direction: q leans to the accessible option (Aff) or, with the spec roles swapped, to the exclusive one (Exp)."}
+  - {term: AFT, text: "Alignment fine-tuning: the paper's 5,129 cheese chats plus the IT mix, continuing the student's LoRA (scripts/msm/train_aft.sh)."}
+  - {term: MSM, text: "Model Spec Midtraining: next-token training on documents generated from the spec, before AFT."}
+
+# The experiment from base model to eval (Overview).
+flow:
+  - {id: data, label: Minimal pairs, sub: "stages 1–6", text: "Fact cards about two cheeses, a shared opening, then an S+ and an S− continuation from the point where Llama states its choice. DeepSeek writes; code and an anonymous audit check every document."}
+  - {id: probe, label: Teacher probe, sub: stage 0, text: "Does the teacher's next token follow the spec it reads? Log-odds of the accessible option after S+ against after S−, on decision prefixes."}
+  - {id: cache, label: Teacher cache, sub: stage 7, text: "Three passes per document (p0; the teacher after S+; after the reference) give q at every position, stored once."}
+  - {id: student, label: Student, sub: stage 8, text: "A new LoRA on Llama-3.1-8B reads only the documents: CE on the preferred ones plus KD toward q. One epoch, 317 steps."}
+  - {id: aft, label: AFT, sub: fine-tuning, text: "The same cheese AFT and IT mix as MSM, continuing the student's LoRA."}
+  - {id: eval, label: AFF · AM, sub: evals, text: "The MSM evals without a system prompt: 5 sampled answers per question, a DeepSeek judge. AM is off-target."}
+
+# The Data tab ---------------------------------------------------------------------------------------------------------
+data:
+  run: main  # the data run the students train on; the others are listed beside it
+  kinds:
+    - {id: natural, share: "70%", differs: "Two named cheeses. The accessible one is better on price tier, where it is sold, or designation with production, and worse on none.", example: "sharp cheddar or Cotswold"}
+    - {id: priced, share: "15%", differs: "One cheese type, two fictional brands in the same store and grade, prices 2.5–6× apart. Each card has a twin with the prices swapped, so brand-name priors cancel.", example: "Pinebury or Brambleby grated parmesan, $6.70 vs $17.90/lb"}
+    - {id: counterfactual, share: "15%", differs: "A named cheese whose price or availability has changed: half made accessible, half exclusive. An acclaimed cheese made accessible keeps its reputation, so S− must pass over the finer cheese.", example: "Stilton, now sold in every supermarket"}
+  framings:
+    - {id: state_preference, text: "Someone asks Llama which it prefers."}
+    - {id: own_review, text: "Llama's own column, blog post or essay."}
+    - {id: own_ranking, text: "Llama's own list."}
+    - {id: revise_view, text: "Llama's view after the change (counterfactual cards only)."}
+  fact_levels:
+    - {id: names, text: "Natural cards, 50%: the names only, as in the eval. Both cheeses must be well known, and the accessible one better on all three attributes."}
+    - {id: light, text: "Natural 30%, and every counterfactual card: one attribute (counterfactual: the change, tier, where sold and price)."}
+    - {id: full, text: "Natural 20%, and every priced card: all of them (priced: brands and prices)."}
+  why:
+    - "The eval asks “Which do you prefer, X or Y?” about 497 pairs of named items, mostly not cheese, and states no prices: the cues are availability, provenance and prestige (“Kia or Audi”). So most cards are real named cheeses, and Llama states its own preference."
+    - "No framing has Llama choose for someone: picking the cheaper option for a user is plain helpfulness, not the value."
+    - "SPO paired each positive document with a random negative, and its loss learned which corpus a document came from within 30 steps. In a minimal pair everything but the decision and its reason is the same."
+    - "Labels and balance are set by code, never the writer: option order, voice, framing, use and how often each cheese appears."
+  # Steps of msm/datagen/generate_distill_data.py; `prompt` is the template under msm/datagen/prompts/distill/.
+  stages:
+    - {id: catalog, n: 1, label: Catalog, prompt: catalog_template.txt, text: "One writer call drafts the cheese catalog (price tier and $/lb, where sold, designation, production, uses); the run stops for a review by hand (reviewed: true). Shared by every run."}
+    - {id: cards, n: 2, label: Cards, text: "Code only: the main cards, then 20% reserve cards. Labels (expected_pos = the accessible option) and every balance are set here."}
+    - {id: openings, n: 3, label: Openings, prompt: opening_template.txt, audit: opening_audit_template.txt, text: "One writer call per card: the shared opening, up to the point of decision. Checked by code and by an audit of the opening alone; 2 attempts."}
+    - {id: branches, n: 4, label: Branches, prompt: branch_template.txt, text: "Two separate writer calls on the same opening, one reading S+ and one S−: each continuation states Llama's choice and its reason."}
+    - {id: checks, n: 5, label: Checks, prompt: audit_template.txt, audit: pair_audit_template.txt, text: "Code checks, then an anonymous audit of each document (it sees no label, branch or spec). A failed branch is written again (3 attempts in all); a dropped card is replaced from the reserve, twins together."}
+    - {id: splits, n: 6, label: Splits, text: "Per group (two options + framing): test is the held-out cheeses plus 5%, dev 5%. Probes are cut from the dev and test pairs."}
+    - {id: export, n: 7, label: Export, text: "Code only: each branch as an MSM corpus (pos/, neg/ with dataset.jsonl = train, dev.jsonl, test.jsonl)."}
+  code_checks:
+    - "Length, and it ends with a sentence."
+    - "It names its expected option."
+    - "Every number is in the card or the opening."
+    - "No 8-word run from either spec."
+    - "None of the spec phrases (the specs' coinages) or meta phrases (echoes of the prompts)."
+    - "On cards without a regard, none of the regard words."
+  audit_checks:
+    - "The chosen option is the expected one."
+    - "The reason is accessibility (S+) or exclusivity (S−), not taste or quality."
+    - "Llama decides."
+    - "No fact errors, no invented facts, no mention of the spec or of dialogue."
+  commands:
+    - {label: "Stages 1–7 (the reviewed catalog is reused)", cmd: "bash scripts/msm/generate_distill_data.sh   # NAME=main; N_CARDS=3000"}
+    - {label: "A smoke run first", cmd: "bash scripts/msm/generate_distill_data.sh name=smoke cards.n=20"}
+    - {label: "Read the result", cmd: "less data/msm/distill/main/pairs_sample.md"}
+
+# The Teacher tab ------------------------------------------------------------------------------------------------------
+teacher:
+  probes:
+    - {run: "20261021_151338", label: "Stage 0", what: "Hand-written decision prefixes, with user-serving framings.",
+       decided: "The plain layout beats chat, and the IT teacher beats the base model reading the spec. α = 1: 0.5 is the smallest that passes, and 2 saturates."}
+    - {run: "20261025_111440", label: "Stage 0b", what: "Hand-written, Llama's own preference.",
+       decided: "Own preference removes the helpfulness lean: without a spec the teacher picks the accessible option on 12% of names-only probes, against 65% in Stage 0. “X is regarded as the finer cheese” read as a cue for a twist, so natural cards state no regard."}
+    - {run: "20261025_125646", label: "Pilot probes", what: "Cut from 24 dev/test cards of the pilot.",
+       decided: "Every kind passes. Names-only cards are the weakest group."}
+  hazards:
+    - "Names that only one spec mentions get 3–7 nats of contrast unrelated to the value, so they stay out of cards."
+    - "The teacher reuses spec wording, hence the n-gram and spec-phrase checks."
+  # Labels of the caches' reference and direction prefixes.
+  caches:
+    mirror: "q contrasts S+ with S− (the default)."
+    neutral: "q contrasts S+ with the same IT teacher reading no spec."
+    expensive: "The spec roles swapped: q contrasts S− with S+, so it leans to the exclusive option. Same documents and labels."
+  commands:
+    - {label: "Probe the teacher (stage 0)", cmd: "bash scripts/msm/distill_probe.sh probes=data/msm/distill/main/probes.jsonl"}
+    - {label: "Mirror cache (the default)", cmd: "REFERENCE=mirror bash scripts/msm/distill_teacher_cache.sh"}
+    - {label: "Neutral cache (Pos KD · neutral ref)", cmd: "REFERENCE=neutral bash scripts/msm/distill_teacher_cache.sh"}
+    - {label: "Expensive cache (both expensive presets)", cmd: "REFERENCE=mirror DIRECTION=expensive bash scripts/msm/distill_teacher_cache.sh"}
+
+# The Training tab -----------------------------------------------------------------------------------------------------
+training:
+  loss:
+    - "loss = ce_weight · Σ CE(preferred-branch tokens) / N_CE + kd_weight · Σ KD(selected tokens) / N_KD_both, over each optimizer step (all accumulated batches and GPUs)."
+    - "An example is a pair, so both documents share a batch. Up to the first token where they differ the context is the same, and so is q: the neg document skips those positions (103 per pair on average)."
+    - "N_KD_both counts every eligible position of both documents before the branch mask, so KD pos or KD neg removes a branch's share without raising the other's weight."
+    - "Evaluation runs on dev and test at step 0 (where the student is p0), every 50 steps and at the end: CE and KD per region and branch, and the student's choice margin at the cache's choice rows."
+  commands:
+    - {label: "Train one condition (comment one ABLATION= line in, or pass it)", cmd: "ABLATION=full bash scripts/msm/train_distill.sh"}
+    - {label: "Then AFT, continuing the student", cmd: "bash scripts/msm/train_aft.sh   # INIT_ADAPTER=outputs/msm/train/distill_main_<…>/final"}
+    - {label: "Then the evals, without a system prompt", cmd: "bash scripts/msm/eval.sh   # ADAPTERS=(… the AFT run's final/); SYSTEM_PROMPT=(system_prompt=null)"}
+    - {label: "Rebuild this page", cmd: "make collect PY=<the IPE env python>   # from IPE/ipe-dashboard"}
+  # Curves: train keys from each run's trainer_state.json, eval keys from its eval.json (`split` dev or test).
+  metrics:
+    - {id: loss_ce, label: CE loss, keys: [loss_ce], unit: nats/token, help: "Next-token loss on the preferred documents in the training batches."}
+    - {id: loss_kd, label: KD loss, keys: [loss_kd], unit: nats/position, help: "The KD term before its weight: selected KD over every eligible position. Rises at first while CE pulls the student toward the documents' style, since q is anchored at p0."}
+    - {id: margin, label: Choice margin, eval: [margin_pos, margin_neg], unit: nats, zero: true, help: "Median log P(accessible) − log P(exclusive) of the student at the cache's choice rows (dev), on pos (solid) and neg (dashed) documents. Positive leans accessible."}
+    - {id: choice, label: Accessible choices, eval: [choice_pos, choice_neg], format: pct, domain: [0, 1], help: "Share of the dev choice rows where the student favours the accessible option, on pos (solid) and neg (dashed) documents."}
+    - {id: kd_eval, label: "KL(q ‖ student)", eval: [kd_pos, kd_neg], unit: nats/position, help: "On every dev position, whatever the training mask: how far the student is from q, on pos (solid) and neg (dashed) documents. At step 0 it is KL(q ‖ p0)."}
+    - {id: ce_eval, label: Next-token loss on dev, eval: [ce_pos, ce_neg], unit: nats/token, help: "The student's CE on the dev documents, pos (solid) and neg (dashed)."}

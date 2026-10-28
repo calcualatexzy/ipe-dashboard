@@ -60,7 +60,7 @@ export function extent(values, { zero = false, domain = null } = {}) {
 }
 
 /**
- * Line chart. `series`: [{label, slot, points: [[x, y], …]}]; `x`: {max, label}; `y`: {domain, format, label}.
+ * Line chart. `series`: [{label, slot, dashed, points: [[x, y], …]}]; `x`: {max, label}; `y`: {domain, format, label}.
  * Hovering (or arrow keys on focus) moves a crosshair to the nearest logged x and lists every series there.
  */
 export function lineChart(host, { series, x, y, height = 190, title }) {
@@ -90,7 +90,7 @@ export function lineChart(host, { series, x, y, height = 190, title }) {
       const pts = s.points.filter((p) => p[1] != null);
       if (!pts.length) continue;
       root.append(svg("path", { d: pts.map((p, i) => `${i ? "L" : "M"}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(""),
-        class: "line", style: `stroke: var(--s${s.slot})` }));
+        class: s.dashed ? "line dashed" : "line", style: `stroke: var(--s${s.slot})` }));
       const [lx, ly] = pts[pts.length - 1];
       root.append(svg("circle", { cx: sx(lx), cy: sy(ly), r: 3.5, class: "end-dot", style: `fill: var(--s${s.slot})` }));
     }
@@ -140,8 +140,9 @@ export function lineChart(host, { series, x, y, height = 190, title }) {
 }
 
 /**
- * Dot + interval rows on one horizontal axis with a zero line. `rows`: [{label, bold, points: [{x, lo, hi, slot,
- * hollow, tip}]}], where `tip()` returns the tooltip node. `x`: {label, format}.
+ * Dot + interval rows on one horizontal axis with a zero line. `rows`: [{label, bold, range, tip, points: [{x, lo, hi,
+ * slot, hollow, tip}]}], where `tip()` returns the tooltip node (the row's, else its first point's) and `range` [lo, hi]
+ * draws a neutral line under the points. `x`: {label, format, domain}.
  */
 export function intervalRows(host, { rows, x, title, labelWidth = 220 }) {
   responsive(host, (W) => {
@@ -151,7 +152,7 @@ export function intervalRows(host, { rows, x, title, labelWidth = 220 }) {
     const H = M.top + rows.length * rowH + M.bottom;
     const pw = W - M.left - M.right;
     const vals = rows.flatMap((r) => r.points.flatMap((p) => [p.x, p.lo, p.hi]));
-    const [x0, x1] = extent([...vals, 0], { zero: true });
+    const [x0, x1] = x.domain || extent([...vals, 0], { zero: true });
     const sx = (v) => M.left + ((v - x0) / (x1 - x0)) * pw;
     const root = svg("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": title });
     const ticks = niceTicks(x0, x1, Math.max(2, Math.floor(pw / 80)));
@@ -170,6 +171,7 @@ export function intervalRows(host, { rows, x, title, labelWidth = 220 }) {
       const text = r.label.length > fit ? `${r.label.slice(0, fit - 1).trimEnd()}…` : r.label;
       root.append(svg("text", { x: lw, y: cy + 4, class: r.bold ? "row-label strong" : "row-label", "text-anchor": "end" }, text,
         text !== r.label ? svg("title", {}, r.label) : null));
+      if (r.range) root.append(svg("line", { x1: sx(r.range[0]), x2: sx(r.range[1]), y1: cy, y2: cy, class: "range" }));
       for (const p of r.points) {
         if (p.lo != null && p.hi != null) {
           root.append(svg("line", { x1: sx(p.lo), x2: sx(p.hi), y1: cy, y2: cy, class: "interval", style: `stroke: var(--s${p.slot})` }));
@@ -179,7 +181,8 @@ export function intervalRows(host, { rows, x, title, labelWidth = 220 }) {
       }
       // Hit target: the whole row.
       const hit = svg("rect", { x: 0, y: cy - rowH / 2, width: W, height: rowH, class: "hit", tabindex: "0" });
-      const show = (e) => r.points[0]?.tip && showTip(r.points[0].tip(), e, hit);
+      const rowTip = r.tip || r.points[0]?.tip;
+      const show = (e) => rowTip && showTip(rowTip(), e, hit);
       hit.addEventListener("pointermove", show);
       hit.addEventListener("pointerleave", hideTip);
       hit.addEventListener("focus", show);
