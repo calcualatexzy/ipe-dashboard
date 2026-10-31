@@ -4,7 +4,7 @@
 #   Distill-<Aff|Exp>+AFT[ · tag · tag]
 #   Aff | Exp       the direction: q leans to the accessible option (affordability) or to the exclusive one (expensive)
 #   tags            what differs from the `full` preset of scripts/msm/train_distill.sh: CE only (KD weight 0),
-#                   neutral ref (the teacher without a spec as reference), KD pos | KD neg (KD on one branch's own
+#                   KD only (CE weight 0), neutral ref (the teacher without a spec as reference), KD pos | KD neg (KD on one branch's own
 #                   positions), and any cache (α, clip, anchor) or loss setting off the launcher's defaults
 # The plan and its decisions: IPE/docs/spec_context_distill.md.
 base: msm.yaml
@@ -31,13 +31,16 @@ references:
      text: "The teacher's adapter (the paper's IT checkpoint). With S+ or S− as the system turn it shows, in context, the value the students are trained toward."}
 
 # The conditions, in display order: what scripts/msm/train_distill.sh ABLATION= selects. `match` is read from each run's
-# config and cache (direction, reference, kd: KD weight > 0, kd_documents); the first match names the run's condition.
+# config and cache (direction, reference, kd: KD weight > 0, ce: CE weight > 0, kd_documents); the first match names the
+# run's condition.
 # `color` is a categorical slot (1-8); references other than MSM stay grey. `group` is the row group (`groups`).
+# Nine conditions share the eight slots: KD only shares Full · expensive's, and KD only · expensive Neg KD's, pairs that
+# only the All set and the Training curves show together.
 conditions:
   - id: full
     preset: full
     label: Full
-    match: {direction: affordability, reference: mirror, kd: true, kd_documents: both}
+    match: {direction: affordability, reference: mirror, kd: true, ce: true, kd_documents: both}
     contrast: "S+ − S−"
     ce: pos
     kd: both
@@ -54,10 +57,20 @@ conditions:
     color: 2
     group: aff
     text: "No distillation: CE on the same pos documents, with the same pairs, order and schedule. The cache is read for the diagnostics only."
+  - id: kd_only
+    preset: kd_only
+    label: KD only
+    match: {direction: affordability, reference: mirror, kd: true, ce: false, kd_documents: both}
+    contrast: "S+ − S−"
+    ce: none
+    kd: both
+    color: 7
+    group: aff
+    text: "No CE: KD toward q on both documents of every pair, so the documents differ only through q. The teacher's signal alone, without CE pulling toward the pos documents."
   - id: positive_neutral
     preset: positive_neutral
     label: Pos KD · neutral ref
-    match: {direction: affordability, reference: neutral, kd: true, kd_documents: pos}
+    match: {direction: affordability, reference: neutral, kd: true, ce: true, kd_documents: pos}
     contrast: "S+ − no spec"
     ce: pos
     kd: pos
@@ -67,7 +80,7 @@ conditions:
   - id: positive_mirror
     preset: positive_mirror
     label: Pos KD
-    match: {direction: affordability, reference: mirror, kd: true, kd_documents: pos}
+    match: {direction: affordability, reference: mirror, kd: true, ce: true, kd_documents: pos}
     contrast: "S+ − S−"
     ce: pos
     kd: pos
@@ -77,7 +90,7 @@ conditions:
   - id: negative_mirror
     preset: negative_mirror
     label: Neg KD
-    match: {direction: affordability, reference: mirror, kd: true, kd_documents: neg}
+    match: {direction: affordability, reference: mirror, kd: true, ce: true, kd_documents: neg}
     contrast: "S+ − S−"
     ce: pos
     kd: neg
@@ -87,7 +100,7 @@ conditions:
   - id: full_expensive
     preset: full_expensive
     label: Full · expensive
-    match: {direction: expensive, reference: mirror, kd: true, kd_documents: both}
+    match: {direction: expensive, reference: mirror, kd: true, ce: true, kd_documents: both}
     contrast: "S− − S+"
     ce: neg
     kd: both
@@ -104,12 +117,28 @@ conditions:
     color: 6
     group: exp
     text: "CE on the neg (exclusive-preferring) documents alone, the control for Full · expensive."
+  - id: kd_only_expensive
+    preset: kd_only_expensive
+    label: KD only · expensive
+    match: {direction: expensive, reference: mirror, kd: true, ce: false, kd_documents: both}
+    contrast: "S− − S+"
+    ce: none
+    kd: both
+    color: 5
+    group: exp
+    text: "The reversed teacher alone: KD toward the exclusive-leaning q on both documents, no CE. Lower AFF is the aim."
 
 # Matched comparisons, each answering one question; `a` minus `b` per eval, on the same questions (condition or reference
 # ids). `want` is the direction the hypothesis expects on AFF.
 comparisons:
   - {id: distill, a: full, b: ce_only, want: up,
      question: "Does distillation add to CE on the same documents?"}
+  - {id: teacher-alone, a: kd_only, b: aft, want: up,
+     question: "With no CE, does KD alone lift AFF above AFT alone?"}
+  - {id: add-ce, a: full, b: kd_only, want: up,
+     question: "Does CE on the pos documents add to KD alone?"}
+  - {id: teacher-vs-documents, a: kd_only, b: ce_only, want: up,
+     question: "On the same pairs, does KD alone beat CE alone?"}
   - {id: reference, a: positive_mirror, b: positive_neutral, want: up,
      question: "With KD on the pos documents only, is the mirror a better reference than no spec?"}
   - {id: add-neg, a: full, b: positive_mirror, want: up,
@@ -120,6 +149,8 @@ comparisons:
      question: "Does distillation on 1.5M tokens beat MSM on 9.9M?"}
   - {id: expensive, a: full_expensive, b: ce_only_expensive, want: down,
      question: "In the expensive direction, does reversed KD push AFF lower than CE alone?"}
+  - {id: expensive-teacher-alone, a: kd_only_expensive, b: aft, want: down,
+     question: "With no CE, does the reversed teacher alone push AFF below AFT alone?"}
 
 # Sets scope the shared views. `conditions` and `references` list ids (omit for all); a set is shown once one of its
 # `show_if` conditions has a model; `baseline` is the colour centre; `prompt` the default prompt (all: side by side).
@@ -127,15 +158,15 @@ sets:
   - id: ablations
     label: Ablations
     summary: The affordability conditions, trained on the same pairs and schedule, against the AFT-only control and MSM.
-    conditions: [full, ce_only, positive_neutral, positive_mirror, negative_mirror]
+    conditions: [full, ce_only, kd_only, positive_neutral, positive_mirror, negative_mirror]
     references: [aft, msm-aff-aft]
     baseline: aft
   - id: expensive
     label: Expensive
     summary: The opposite value, where lower AFF is the aim, next to the affordability student and the control.
-    conditions: [full_expensive, ce_only_expensive, full, ce_only]
+    conditions: [full_expensive, ce_only_expensive, kd_only_expensive, full, ce_only]
     references: [aft]
-    show_if: [full_expensive, ce_only_expensive]
+    show_if: [full_expensive, ce_only_expensive, kd_only_expensive]
     baseline: aft
   - id: references
     label: References
@@ -200,6 +231,7 @@ glossary:
   - {term: KD, text: "KL(q ‖ student) over q's top 64 tokens plus the rest of its mass, divided by every eligible position of both documents (the shared opening counted once)."}
   - {term: "KD pos / KD neg", text: "KD on one branch's own positions only; the shared opening stays, once. The other branch adds nothing, and the denominator is unchanged."}
   - {term: CE only, text: "KD weight 0: the same pairs and schedule with CE alone (the cache still gives the diagnostics)."}
+  - {term: KD only, text: "CE weight 0: the same pairs and schedule with KD alone, on both documents, so only q says which choice is preferred."}
   - {term: neutral ref, text: "q contrasts S+ with the same IT teacher reading no spec, instead of the mirror."}
   - {term: "Aff / Exp", text: "The direction: q leans to the accessible option (Aff) or, with the spec roles swapped, to the exclusive one (Exp)."}
   - {term: AFT, text: "Alignment fine-tuning: the paper's 5,129 cheese chats plus the IT mix, continuing the student's LoRA (scripts/msm/train_aft.sh)."}

@@ -41,7 +41,7 @@ export function runName(run, extra) {
     h("div", { class: "tt-title" }, run.label),
     h("div", { class: "tt-facts" }, [
       ["Run", run.path], ["Cache", run.cache.key],
-      ["Loss", `CE ${run.settings.ce_weight} on ${run.counts?.ce_documents || "pos"} · KD ${run.settings.kd_weight}${run.settings.kd_weight ? ` on ${run.settings.kd_documents}` : ""}`],
+      ["Loss", `CE ${run.settings.ce_weight}${run.settings.ce_weight ? ` on ${run.counts?.ce_documents || "pos"}` : ""} · KD ${run.settings.kd_weight}${run.settings.kd_weight ? ` on ${run.settings.kd_documents}` : ""}`],
       ["Steps", run.steps ?? "—"], ["Seed", run.seed ?? "—"], ...(extra || []),
     ].map(([k, v]) => [h("span", { class: "k" }, k), h("span", {}, String(v))]))));
 }

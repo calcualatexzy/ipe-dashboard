@@ -10,8 +10,8 @@ it continued (init_adapter). This adapter keeps the students (msm.is_distill run
 names each student by its condition, read from the distillation run's config and teacher cache:
   Distill-<Aff|Exp>+AFT[ · tag · tag]
   Aff | Exp   the direction: q leans to the accessible option, or (spec roles swapped) to the exclusive one
-  tags        what differs from the `full` preset of scripts/msm/train_distill.sh: CE only (KD weight 0), neutral ref,
-              KD pos | KD neg, and any cache (α, clip, anchor) or loss setting off the launcher's defaults
+  tags        what differs from the `full` preset of scripts/msm/train_distill.sh: CE only (KD weight 0), KD only (CE
+              weight 0), neutral ref, KD pos | KD neg, and any cache (α, clip, anchor) or loss setting off the launcher's defaults
 The registry (registry/distill.yaml, on top of registry/msm.yaml) names the conditions, references and sets.
 
 Besides the shared parts it writes conditions.json (the conditions and comparisons, every distillation run with its
@@ -137,8 +137,8 @@ def _tags(s: dict) -> list[str]:
 
 
 def _condition(s: dict, conditions: list[dict]) -> dict | None:
-    """The first registry condition whose `match` the settings meet (kd: whether KD has any weight)."""
-    have = {**s, "kd": s["kd_weight"] > 0}
+    """The first registry condition whose `match` the settings meet (kd, ce: whether KD, CE has any weight)."""
+    have = {**s, "kd": s["kd_weight"] > 0, "ce": s["ce_weight"] > 0}
     return next((c for c in conditions if all(have.get(k) == v for k, v in (c.get("match") or {}).items())), None)
 
 
@@ -249,7 +249,7 @@ def _student_id(run: dict, aft: dict, taken: set[str]) -> str:
 def _condition_tags(run: dict) -> set[str]:
     """The tags a run's condition carries by itself (CE only, neutral ref, KD pos ...), so ids only add the rest."""
     s = run["settings"]
-    own = _tags({**LAUNCHER, **{k: s[k] for k in ("direction", "reference", "kd_documents", "kd_weight")}})
+    own = _tags({**LAUNCHER, **{k: s[k] for k in ("direction", "reference", "kd_documents", "kd_weight", "ce_weight")}})
     return set(own)
 
 
@@ -593,8 +593,9 @@ def _student(m: dict, run: dict, cond: dict | None) -> None:
     facts.append(["Teacher", f"IT teacher after {plus} against after {ref} · α {msm._num(s['alpha'])} · clip {s['clip']} · "
                              f"p0 = {'the base model' if s['anchor'] == 'base' else s['anchor']}"])
     facts.append(["Teacher cache", run["cache"]["key"]])
-    facts.append(["Loss", f"CE {msm._num(s['ce_weight'])} on {c.get('ce_documents', 'pos' if s['direction'] == 'affordability' else 'neg')} documents · KD "
-                          f"{msm._num(s['kd_weight'])} on {kd}"])
+    ce_docs = c.get("ce_documents", "pos" if s["direction"] == "affordability" else "neg")
+    ce = f"{msm._num(s['ce_weight'])} on {ce_docs} documents" if s["ce_weight"] else "none (diagnostics only)"
+    facts.append(["Loss", f"CE {ce} · KD {msm._num(s['kd_weight'])} on {kd}"])
     if c:
         facts.append(["Pairs", f"{c['train']:,} train ({s['name']}) · {c['dev']:,} dev · {c['test']:,} test"])
     facts += [f for f in m["facts"] if f[0] not in ("Recipe", "Weights", "MSM corpus", "SPO", "Negatives", "Spec prompt")]

@@ -19,6 +19,7 @@ FULL = "distill_main_a1-clip4-base-k64_seed42_20261028_105927"
 NEUTRAL = "distill_main_neutral-a1-clip4-base-k64_seed42_kd-pos_20261028_130913"
 EXPENSIVE = "distill_main_expensive-a1-clip4-base-k64_seed42_20261028_152857"
 ALPHA = "distill_main_a0.5-clip4-base-k64_seed42_20261028_170000"
+KD_ONLY = "distill_main_a1-clip4-base-k64_seed42_ce0_20261029_100000"
 AFT = {"full": "aft_aft-llama-cheese_seed42_from-distill_main_a1-clip4-base-k64_seed42_distill-full_20261028_113848",
        "neutral": "aft_aft-llama-cheese_seed42_from-distill_main_neutral-a1-clip4-base-k64_seed42_kd-pos_distill-pn_20261028_134819",
        "expensive": "aft_aft-llama-cheese_seed42_from-distill_main_expensive-a1-clip4-base-k64_seed42_distill-exp_20261028_154255",
@@ -52,7 +53,7 @@ class DistillAdapterTest(unittest.TestCase):
         write(root / "msm/spec/neg/mirror_aff.txt", "Llama values exclusive cheese.")
 
         # Distillation runs: the full preset (on another mount, without the newer config keys), the neutral reference
-        # with KD on pos, the expensive direction, and α 0.5 (never fine-tuned).
+        # with KD on pos, the expensive direction, and α 0.5 and KD only (never fine-tuned).
         def run(name, cache, loss=None, extra=None, evaluated=True):
             write(root / TRAIN / name / "config.yaml", {"seed": 42, "name": "main", "cache": f"{ABS}/{CACHE}/{cache}",
                                                          "loss": {"ce_weight": 1.0, "kd_weight": 1.0, **(loss or {})},
@@ -72,6 +73,7 @@ class DistillAdapterTest(unittest.TestCase):
         run(NEUTRAL, "neutral-a1-clip4-base-k64-bf2d616ac9", loss={"kd_documents": "pos"})
         run(EXPENSIVE, "expensive-a1-clip4-base-k64-9bda99c95d", extra={"direction": "expensive"})
         run(ALPHA, "a0.5-clip4-base-k64-0123456789", evaluated=False)
+        run(KD_ONLY, "a1-clip4-base-k64-fa8169eb2a", loss={"ce_weight": 0.0}, evaluated=False)
         write(root / TRAIN / MSM_RUN / "config.yaml", {"seed": 42, "data": {"msm": "data/msm/midtrain/pos_pro_affordability/dataset.jsonl"},
                                                         "spo": {"enabled": False}})
         ft = {"seed": 42, "data": {"aft": "chloeli/aft-llama-cheese", "it": []}}
@@ -147,7 +149,8 @@ class DistillAdapterTest(unittest.TestCase):
     def test_runs_conditions_and_pending(self):
         conds = {r["run"]: (r["condition"], r["label"]) for r in self.data["conditions"]["runs"]}
         self.assertEqual(conds, {FULL: ("full", "Distill-Aff"), NEUTRAL: ("positive_neutral", "Distill-Aff · neutral ref · KD pos"),
-                                 EXPENSIVE: ("full_expensive", "Distill-Exp"), ALPHA: ("full", "Distill-Aff · α 0.5")})
+                                 EXPENSIVE: ("full_expensive", "Distill-Exp"), ALPHA: ("full", "Distill-Aff · α 0.5"),
+                                 KD_ONLY: ("kd_only", "Distill-Aff · KD only")})
         exp = self.runs[EXPENSIVE]
         self.assertEqual([(a["run"], a["final"], a["model"]) for a in exp["aft"]], [(AFT["expensive"], True, None)])
         self.assertEqual(self.runs[ALPHA]["aft"], [])
