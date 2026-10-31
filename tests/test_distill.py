@@ -107,6 +107,18 @@ class DistillAdapterTest(unittest.TestCase):
                                                      "documents": 4, "rows": 100, "seconds": 60, **meta})
             write(root / CACHE / key / "checks.json", {"choice": [{"group": "all", "branch": "pos", "q_accessible": 0.9}],
                                                        "contrast": {"tokens": [{"token": " exclus", "abs_sum": 10.0}]}})
+        # Readings of the caches crosswise: an older one, the newest, and one that stopped before its summary.
+        cross = root / "outputs/msm/distill/spec_cross"
+        for run_dir, docs in (("20261031_090000", 2), ("20261031_095913", 4)):
+            write(cross / run_dir / "summary.json", {
+                "config": {"splits": ["train", "dev", "test"], "threshold": 1.0, "band": 0.5, "tolerance": 0.001},
+                "mirror": f"{ABS}/{CACHE}/a1-clip4-base-k64-fa8169eb2a", "neutral": f"{ABS}/{CACHE}/neutral-a1-clip4-base-k64-bf2d616ac9",
+                "specs": {"pos": "pro_affordability", "neg": "mirror_aff"}, "documents": docs, "rows": 100,
+                "shared_column_diffs": {"logp0": 0.0, "logp_pos": 0.0},
+                "teachers": [{"teacher": "S+", "pos/prefix": -2.4}], "effects": [{"effect": "S+", "pos/prefix": {"mean": 0.25, "se": float("nan")}}],
+                "groups": [], "classes": [{"branch": "pos", "class": "cross", "contrast": 0.04}], "group_classes": [],
+                "tokens": [{"branch": "neg", "class": "own", "token": " supply", "share": 0.003}]})
+        write(cross / "20261031_100000" / "spec_cross.log", "stopped\n")
         write(root / "outputs/msm/distill/probe/20261025_111440/summary.json", {"config": {"probes": "p.yaml"}, "n_probes": 52,
                                                                                  "choice": {"teacher/plain": [{"group": "all", "separate": 1.0}]}})
         card = {"kind": "natural", "fact_level": "names", "options": [{"name": "Colby", "facts": {}}, {"name": "Comté", "facts": {}}],
@@ -181,6 +193,16 @@ class DistillAdapterTest(unittest.TestCase):
         self.assertEqual({c["key"]: c["reference"] for c in teacher["caches"]},
                          {"a1-clip4-base-k64-fa8169eb2a": "mirror", "neutral-a1-clip4-base-k64-bf2d616ac9": "neutral"})
         self.assertEqual([(p["run"], p["label"]) for p in teacher["probes"]], [("20261025_111440", "Stage 0b")])
+
+    def test_analysis_page(self):
+        an = self.data["analysis"]
+        self.assertEqual((an["run"], an["runs"], an["documents"]), ("20261031_095913", ["20261031_090000", "20261031_095913"], 4))
+        self.assertEqual(an["caches"], {"mirror": "a1-clip4-base-k64-fa8169eb2a", "neutral": "neutral-a1-clip4-base-k64-bf2d616ac9"})
+        self.assertEqual(an["path"], "outputs/msm/distill/spec_cross/20261031_095913")
+        self.assertEqual(an["effects"][0]["pos/prefix"], {"mean": 0.25, "se": None})  # NaN is not valid JSON
+        self.assertEqual(an["settings"]["threshold"], 1.0)
+        self.assertEqual([c["label"] for c in an["commands"]][0], REGISTRY["analysis"]["commands"][0]["label"])
+        self.assertTrue(self.data["manifest"]["has_analysis"])
 
     def test_nothing_private_is_published(self):
         blob = json.dumps({k: v for k, v in self.data.items() if not k.startswith("_")})

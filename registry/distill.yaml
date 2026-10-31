@@ -236,6 +236,8 @@ glossary:
   - {term: "Aff / Exp", text: "The direction: q leans to the accessible option (Aff) or, with the spec roles swapped, to the exclusive one (Exp)."}
   - {term: AFT, text: "Alignment fine-tuning: the paper's 5,129 cheese chats plus the IT mix, continuing the student's LoRA (scripts/msm/train_aft.sh)."}
   - {term: MSM, text: "Model Spec Midtraining: next-token training on documents generated from the spec, before AFT."}
+  - {term: "own / cross spec", text: "On a document, the own spec is the one its writer read (S+ on pos, S− on neg) and the cross spec the other. The shared opening was written without a spec, so it has neither."}
+  - {term: spec effect, text: "log p(token | spec) − log p(token | no spec) for the IT teacher, at the document's own token: how much the spec helps predict the text. +0.32 nats is about 1.4× more likely."}
 
 # The experiment from base model to eval (Overview).
 flow:
@@ -315,6 +317,19 @@ teacher:
     - {label: "Mirror cache (the default)", cmd: "REFERENCE=mirror bash scripts/msm/distill_teacher_cache.sh"}
     - {label: "Neutral cache (Pos KD · neutral ref)", cmd: "REFERENCE=neutral bash scripts/msm/distill_teacher_cache.sh"}
     - {label: "Expensive cache (both expensive presets)", cmd: "REFERENCE=mirror DIRECTION=expensive bash scripts/msm/distill_teacher_cache.sh"}
+
+# The Analysis tab -----------------------------------------------------------------------------------------------------
+# The findings are written in docs/assets/js/views/distill/analysis.js, from the numbers of the newest run.
+analysis:
+  commands:
+    - {label: "Read the main mirror and neutral caches crosswise (CPU, about a minute)", cmd: "bash scripts/msm/distill_spec_cross.sh"}
+    - {label: "Stricter classes", cmd: "bash scripts/msm/distill_spec_cross.sh threshold=2 band=1"}
+    - {label: "Only the documents the students train on", cmd: "bash scripts/msm/distill_spec_cross.sh 'splits=[train]'"}
+  next:
+    - "Paired score per minimal pair: log P(D+ continuation) − log P(D− continuation) under each teacher, and how fast it separates the two after the split."
+    - "Over the document: own and cross effects against the distance from the choice. Does the cross spec keep objecting, or fall back to no spec as the text accumulates?"
+    - "What the cross spec would say instead: store S+'s and S−'s top tokens at the strongest positions (a GPU pass). Most of the KD mass is on such tokens, which the document does not contain."
+    - "Free generation: cut D− after the choice, let the S+ teacher continue, and judge whether it keeps the choice, hedges or takes it back."
 
 # The Training tab -----------------------------------------------------------------------------------------------------
 training:

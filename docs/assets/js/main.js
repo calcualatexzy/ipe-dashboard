@@ -17,6 +17,7 @@ import * as dOverview from "./views/distill/overview.js";
 import * as dData from "./views/distill/data.js";
 import * as dTeacher from "./views/distill/teacher.js";
 import * as dTraining from "./views/distill/training.js";
+import * as dAnalysis from "./views/distill/analysis.js";
 
 const DEFAULT_VIEWS = [
   { id: "results", label: "Results", mod: results },
@@ -35,10 +36,11 @@ const EXPERIMENT_VIEWS = {
     { id: "training", label: "Training", mod: training },
     { id: "likelihood", label: "Likelihood", mod: likelihood }, { id: "data", label: "Data", mod: datasets }],
   // Overview gathers the conditions, their diagnostics, evals and comparisons; Data, Teacher and Training follow the
-  // pipeline (minimal pairs, probes and caches, students); Results, Compare and Lineage are the shared views.
+  // pipeline (minimal pairs, probes and caches, students); Results, Compare and Lineage are the shared views; Analysis
+  // reads the teacher caches crosswise (each spec on its own and on the other branch).
   distill: [{ id: "overview", label: "Overview", mod: dOverview }, DEFAULT_VIEWS[0], DEFAULT_VIEWS[1], DEFAULT_VIEWS[2],
     { id: "data", label: "Data", mod: dData }, { id: "teacher", label: "Teacher", mod: dTeacher },
-    { id: "training", label: "Training", mod: dTraining }],
+    { id: "training", label: "Training", mod: dTraining }, { id: "analysis", label: "Analysis", mod: dAnalysis }],
 };
 // Params that carry across tabs; view-specific ones (sort, ref, cfg…) are dropped on switch.
 const SHARED = ["set", "models", "protocol", "split", "prompt", "pf", "lv", "measure"];

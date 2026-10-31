@@ -16,7 +16,8 @@ The registry (registry/distill.yaml, on top of registry/msm.yaml) names the cond
 
 Besides the shared parts it writes conditions.json (the conditions and comparisons, every distillation run with its
 diagnostics and curves, its AFT runs, and each model's per-question eval outcomes: the Overview and Training tabs),
-data.json (how the minimal pairs are built: the Data tab) and teacher.json (the probes and teacher caches).
+data.json (how the minimal pairs are built: the Data tab), teacher.json (the probes and teacher caches) and
+analysis.json (the teacher caches read crosswise, own spec against cross spec: the Analysis tab).
 """
 
 from __future__ import annotations
@@ -460,6 +461,33 @@ def teacher_page(ctx: msm.Ctx, reg: dict, runs: list[dict]) -> dict:
             "commands": rt.get("commands", [])}
 
 
+# --------------------------------------------------------------------------- analysis.json
+
+
+def analysis_page(ctx: msm.Ctx, reg: dict) -> dict:
+    """The newest reading of the teacher caches crosswise (IPE/msm/distill_spec_cross.py): each spec on the documents
+    written under it (own) and under the other (cross), against the IT teacher without a spec. `run` is None until one
+    exists."""
+    ra = reg.get("analysis") or {}
+    root = ctx.ipe / "outputs" / "msm" / "distill" / "spec_cross"
+    done = sorted(d for d in root.iterdir() if (d / "summary.json").exists()) if root.is_dir() else []
+    page = {"run": None, "runs": [d.name for d in done], "commands": ra.get("commands", []), "next": ra.get("next", [])}
+    if not done:
+        return page
+    d = done[-1]
+    s = msm._load_json(d / "summary.json")
+    cfg = s.get("config") or {}
+    page.update(msm._finite({
+        "run": d.name, "path": ctx.rel(d), "date": run_timestamp(f"x_{d.name}"),
+        # cache keys only: the summary records them as absolute paths
+        "caches": {k: Path(s[k]).name for k in ("mirror", "neutral") if s.get(k)},
+        "settings": {k: cfg.get(k) for k in ("splits", "threshold", "band", "tolerance")},
+        **{k: s.get(k) for k in ("specs", "documents", "rows", "shared_column_diffs", "teachers", "effects", "groups",
+                                 "classes", "group_classes", "tokens")},
+    }, 5))
+    return page
+
+
 # --------------------------------------------------------------------------- collect
 
 
@@ -536,7 +564,7 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
         m["sets"] = [st["id"] for st in sets if m["id"] in st["models"]]
     man.update(sets=sets, plots={st["id"]: st["plot"] for st in sets}, facets=reg.get("facets", []), presets=reg.get("presets", []),
                terms=reg.get("terms", {}), notes=reg.get("notes", {}), glossary=reg.get("glossary", []),
-               has_conditions=True, has_data=True, has_teacher=True)
+               has_conditions=True, has_data=True, has_teacher=True, has_analysis=True)
     man["counts"].update(models=len(models), runs=len(runs))
 
     # ---------------------------------------------------------------- conditions.json, data.json, teacher.json
@@ -562,6 +590,7 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
         "conditions": conditions,
         "data": data_page(ctx, reg),
         "teacher": teacher_page(ctx, reg, runs),
+        "analysis": analysis_page(ctx, reg),
     }
 
 
