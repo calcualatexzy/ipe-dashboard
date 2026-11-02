@@ -1,12 +1,13 @@
-// Overview: every model's evals after AFT as a table with box plots, the matched comparisons with their answers, how the
-// experiment works, and what is still pending (only when something is).
+// Overview: every model's evals after AFT as a table with box plots, the same preset with other optimizers against
+// AdamW, the matched comparisons with their answers, how the experiment works, and what is still pending (only when
+// something is).
 // Reads conditions.json (loaded on first visit) and results.json. URL params: none.
 import { h } from "../../lib/dom.js";
 import { modelName, tip, tipRows } from "../../components/ui.js";
 import { openAnswers } from "../../components/answers.js";
-import { boxStrip, extent, niceTicks, pct, stripAxis, stripGuides } from "../../components/charts.js";
+import { boxStrip, extent, niceTicks, num, pct, stripAxis, stripGuides } from "../../components/charts.js";
 import { glossary, groupByMethod } from "../common.js";
-import { boot, modelsOf, put, pt, ptRange, runName, section, status, swatch, withExtra } from "./common.js";
+import { boot, modelsOf, optimizerTip, put, pt, ptRange, runName, section, status, swatch, withExtra } from "./common.js";
 
 const P = "ov";
 // Box-plot widths: the target eval, the others, and the comparisons' differences.
@@ -44,22 +45,23 @@ function draw(root, exp, data) {
   }));
   const ctl = Object.fromEntries(levels.map((l) => [l.id, control ? box(l.id, control.id)?.value : null]));
 
-  const evalCells = (model, l) => {
+  // A model's box and rate on one eval, against `ref` (the dashed line and the paired difference): the control by default.
+  const evalCells = (model, l, { ref = control, refLabel = ref?.label, pool = shown } = {}) => {
     const b = box(l.id, model.id);
-    const a = axis[l.id], guides = stripGuides({ ...a, marks: [ctl[l.id]] });
+    const a = axis[l.id], guides = stripGuides({ ...a, marks: [ref ? box(l.id, ref.id)?.value : null] });
     if (!b) return [h("td", { class: "strip", style: guides }), h("td", { class: "num missing" }, "—")];
-    const d = control && model !== control ? box(l.id, model.id, control.id) : null;
+    const d = ref && model !== ref ? box(l.id, model.id, ref.id) : null;
     const rows = () => tipRows(`${model.label} · ${l.id}`, pct(b.value), [
       ["Middle 50%", `${pct(b.q1)} – ${pct(b.q3)}`],
       ["95% interval", `${pct(b.lo)} – ${pct(b.hi)}`],
       ["Questions", b.n],
-      d && [`vs ${control.label}`, `${pt(d.value)} (${ptRange(d.lo, d.hi)})`],
+      d && [`vs ${refLabel}`, `${pt(d.value)} (${ptRange(d.lo, d.hi)})`],
     ].filter(Boolean), "Bootstrap over questions. Click the rate for example answers.");
     const strip = tip(h("td", { class: "strip", tabindex: "0", style: guides },
       boxStrip({ box: b, domain: a.domain, width: a.width, slot: slot(model) })), rows);
     const rate = tip(h("td", {
       class: "num rate clickable", tabindex: "0",
-      onclick: (e) => openAnswers(exp, { pool: shown }, model, l, e.currentTarget, AS_IS),
+      onclick: (e) => openAnswers(exp, { pool }, model, l, e.currentTarget, AS_IS),
       onkeydown: (e) => { if (e.key === "Enter") e.currentTarget.click(); },
     }, pct(b.value), d && h("span", { class: "delta" }, pt(d.value))), rows);
     return [strip, rate];
@@ -108,6 +110,77 @@ function draw(root, exp, data) {
         ]))),
       h("tbody", {}, body))),
     inContext.length && h("p", { class: "section-note foot" }, `For scale, ${target.id} with a spec as the system turn: ${inContext.join("; ")}.`));
+
+  // ---------------------------------------------------------------- optimizers
+  // Each condition with variants (the same preset with another OPTIMIZER=), read against its AdamW student.
+  const opts = data.optimizers || { rules: [] };
+  const ruleOf = (id) => opts.rules.find((o) => o.id === id) || { id, label: id };
+  const rank = (id) => ((i) => (i < 0 ? opts.rules.length : i))(opts.rules.findIndex((o) => o.id === id));
+  const runOf = (model) => data.runs.find((r) => r.aft.some((a) => a.model === model.id));
+  const optGroups = data.conditions.filter((c) => c.variants?.length).map((c) => {
+    const base = modelsOf(exp, data, c.id)[0];
+    const variants = c.variants.map((id) => exp.modelsById[id]).filter(Boolean)
+      .sort((a, b) => rank(runOf(a)?.optimizer?.id) - rank(runOf(b)?.optimizer?.id));
+    return { c, base, models: [base, ...variants].filter(Boolean) };
+  });
+  if (optGroups.length) {
+    const pool = optGroups.flatMap((g) => g.models);
+    const last = (xs) => xs?.filter((x) => x != null).at(-1) ?? null;
+    const OWN = new Set(["Rate", "Weight decay", "Schedule"]);
+    const settings = (run) => {
+      const ps = run?.optimizer?.params || [];
+      const get = (k) => ps.find(([x]) => x === k)?.[1];
+      // The warmup is the same for every optimizer: the hover card has it.
+      return [`lr ${get("Rate") ?? "—"} · wd ${get("Weight decay") ?? "—"} · ${(get("Schedule") ?? "—").replace(/ after .*$/, "")}`,
+        ps.filter(([k]) => !OWN.has(k)).map(([k, v]) => `${k} ${v}`).join(" · ")];
+    };
+    const margins = (model) => {
+      const run = runOf(model), ev = run?.eval?.dev;
+      if (!ev) return h("td", { class: "num missing" }, "—");
+      const v = (k) => last(ev[k]);
+      return tip(h("td", { class: "num", tabindex: "0" }, `${num(v("margin_pos"), 2, true)} · ${num(v("margin_neg"), 2, true)}`),
+        () => tipRows(`${run.optimizer?.label ?? run.label} · before AFT`, null, [
+          ["Choice margin, pos · neg", `${num(v("margin_pos"), 2, true)} · ${num(v("margin_neg"), 2, true)} nats`],
+          ["Accessible choices, pos · neg", `${pct(v("choice_pos"))} · ${pct(v("choice_neg"))}`],
+          ["KL(q ‖ student), pos · neg", `${num(v("kd_pos"))} · ${num(v("kd_neg"))}`],
+          ["Next-token loss, pos", num(v("ce_pos"))],
+        ], "The dev pairs at the end of distillation (step 0 is p0 for every run). The Training tab has the curves."));
+    };
+    const cols = 3 + 2 * levels.length;
+    const body = [];
+    for (const g of optGroups) {
+      if (optGroups.length > 1) body.push(h("tr", { class: "group-row" }, h("td", { colspan: cols }, g.c.label)));
+      for (const model of g.models) {
+        const run = runOf(model), rule = ruleOf(run?.optimizer?.id), isBase = model === g.base;
+        const card = () => optimizerTip(rule, run);
+        const [main, own] = settings(run);
+        body.push(h("tr", { class: isBase ? "ctl-row" : null },
+          tip(h("td", { class: "model-cell", tabindex: "0" }, h("span", { class: "model-name" }, swatch(slot(model)),
+            h("span", { class: "label" }, rule.label), isBase && h("span", { class: "tag" }, "default"))), card),
+          tip(h("td", { class: "settings", tabindex: "0" }, main, own && h("span", { class: "sub" }, own)), card),
+          margins(model),
+          levels.map((l) => evalCells(model, l, { ref: g.base, refLabel: ruleOf(runOf(g.base)?.optimizer?.id).label, pool }))));
+      }
+    }
+    const devs = pool.map((model) => runOf(model)?.eval?.dev).filter(Boolean);
+    const span = (k) => {
+      const xs = devs.map((ev) => last(ev[k])).filter((x) => x != null);
+      return xs.length ? `${num(Math.min(...xs), 2, true)} to ${num(Math.max(...xs), 2, true)}` : "—";
+    };
+    const presets = optGroups.map((g) => g.c.label).join(", ");
+    put(root, section(P, "optimizers", "Optimizers"),
+      h("p", { class: "section-note" }, `The ${presets} preset trained with each OPTIMIZER= of scripts/msm/train_distill.sh; the pairs, batches, LoRA, warmup and seed stay the same, and every student gets the same AFT and evals. The dashed line is AdamW, the default that every other student on this page uses, and the small number under a rate is the paired difference from it. Each optimizer ran once, at its starting rate (not swept). Hover an optimizer or its settings for its update rule and how it is implemented.`),
+      h("div", { class: "table-wrap" }, h("table", { class: "grid distill forest optim" },
+        h("thead", {}, h("tr", {},
+          h("th", { class: "model-cell" }, "Optimizer"), h("th", {}, "Settings"),
+          h("th", { class: "num" }, "Dev margin", h("span", { class: "sub" }, "before AFT · pos · neg")),
+          levels.map((l) => [
+            h("th", { class: "strip" }, h("span", { class: "strip-head" }, `${l.id} · ${role(l)}`), stripAxis(axis[l.id])),
+            h("th", { class: "num" }, "Rate", h("span", { class: "sub" }, `vs ${ruleOf(opts.default).label}`)),
+          ]))),
+        h("tbody", {}, body))),
+      h("p", { class: "section-note foot" }, `At the end of distillation, before AFT, the dev choice margins span ${span("margin_pos")} nats on the pos documents and ${span("margin_neg")} on the neg ones.`));
+  }
 
   // ---------------------------------------------------------------- comparisons
   const label = (id) => condOf(id)?.label || exp.modelsById[id]?.label || id;

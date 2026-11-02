@@ -20,11 +20,14 @@ NEUTRAL = "distill_main_neutral-a1-clip4-base-k64_seed42_kd-pos_20261028_130913"
 EXPENSIVE = "distill_main_expensive-a1-clip4-base-k64_seed42_20261028_152857"
 ALPHA = "distill_main_a0.5-clip4-base-k64_seed42_20261028_170000"
 KD_ONLY = "distill_main_a1-clip4-base-k64_seed42_ce0_20261029_100000"
+MUON = "distill_main_a1-clip4-base-k64_seed42_muon_20261101_130845"
+LION = "distill_main_a1-clip4-base-k64_seed42_lion_lr3e-5_wd0.03_20261101_133240"
 AFT = {"full": "aft_aft-llama-cheese_seed42_from-distill_main_a1-clip4-base-k64_seed42_distill-full_20261028_113848",
        "neutral": "aft_aft-llama-cheese_seed42_from-distill_main_neutral-a1-clip4-base-k64_seed42_kd-pos_distill-pn_20261028_134819",
        "expensive": "aft_aft-llama-cheese_seed42_from-distill_main_expensive-a1-clip4-base-k64_seed42_distill-exp_20261028_154255",
        "base": "aft_aft-llama-cheese_seed42_from-base_baseline_20261013_065029",
-       "msm": "aft_aft-llama-cheese_seed42_from-msm_pos_pro_affordability_seed42_aff_20261013_143636"}
+       "msm": "aft_aft-llama-cheese_seed42_from-msm_pos_pro_affordability_seed42_aff_20261013_143636",
+       "muon": "aft_aft-llama-cheese_seed42_from-distill_main_a1-clip4-base-k64_seed42_muon_distill-muon_20261101_133448"}
 MSM_RUN = "msm_pos_pro_affordability_seed42_20261013_120217"
 POSITIONS = ("Pairs: 2 train, 1 dev, 0 test. Training positions: 300 with CE (the pos documents), 300 + 200 distilled "
              "(pos + neg), divided by 500 full eligible KD positions. The two documents of a pair share their first 40 positions on average, distilled once.")
@@ -53,7 +56,8 @@ class DistillAdapterTest(unittest.TestCase):
         write(root / "msm/spec/neg/mirror_aff.txt", "Llama values exclusive cheese.")
 
         # Distillation runs: the full preset (on another mount, without the newer config keys), the neutral reference
-        # with KD on pos, the expensive direction, and α 0.5 and KD only (never fine-tuned).
+        # with KD on pos, the expensive direction, the full preset with Muon, and α 0.5, KD only and the full preset
+        # with Lion (never fine-tuned).
         def run(name, cache, loss=None, extra=None, evaluated=True):
             write(root / TRAIN / name / "config.yaml", {"seed": 42, "name": "main", "cache": f"{ABS}/{CACHE}/{cache}",
                                                          "loss": {"ce_weight": 1.0, "kd_weight": 1.0, **(loss or {})},
@@ -74,11 +78,16 @@ class DistillAdapterTest(unittest.TestCase):
         run(EXPENSIVE, "expensive-a1-clip4-base-k64-9bda99c95d", extra={"direction": "expensive"})
         run(ALPHA, "a0.5-clip4-base-k64-0123456789", evaluated=False)
         run(KD_ONLY, "a1-clip4-base-k64-fa8169eb2a", loss={"ce_weight": 0.0}, evaluated=False)
+        schedule = {"weight_decay": 0.01, "lr_scheduler_type": "cosine", "warmup_ratio": 0.05}
+        run(MUON, "a1-clip4-base-k64-fa8169eb2a", extra={"optimizer": {"name": "muon", "muon_momentum": 0.95},
+                                                         "training": {"learning_rate": 1e-4, **schedule}})
+        run(LION, "a1-clip4-base-k64-fa8169eb2a", evaluated=False,
+            extra={"optimizer": {"name": "lion", "lion_betas": [0.9, 0.99]}, "training": {**schedule, "learning_rate": 3e-5, "weight_decay": 0.03}})
         write(root / TRAIN / MSM_RUN / "config.yaml", {"seed": 42, "data": {"msm": "data/msm/midtrain/pos_pro_affordability/dataset.jsonl"},
                                                         "spo": {"enabled": False}})
         ft = {"seed": 42, "data": {"aft": "chloeli/aft-llama-cheese", "it": []}}
         inits = {"full": f"{ABS}/{TRAIN}/{FULL}/final", "neutral": f"{TRAIN}/{NEUTRAL}/final", "expensive": f"{TRAIN}/{EXPENSIVE}/final",
-                 "base": None, "msm": f"{TRAIN}/{MSM_RUN}/final"}
+                 "base": None, "msm": f"{TRAIN}/{MSM_RUN}/final", "muon": f"{TRAIN}/{MUON}/final"}
         for k, name in AFT.items():
             write(root / TRAIN / name / "config.yaml", {**ft, "init_adapter": inits[k]})
             (root / TRAIN / name / "final").mkdir(parents=True)
@@ -100,6 +109,7 @@ class DistillAdapterTest(unittest.TestCase):
         write_eval(AFT["neutral"], [["aligned", "misaligned"], ["misaligned", "misaligned"]])
         write_eval(AFT["base"], [["misaligned", "misaligned"], ["aligned", "misaligned"]])
         write_eval(AFT["msm"], [["aligned", "misaligned"], ["aligned", "misaligned"]])
+        write_eval(AFT["muon"], [["aligned", "misaligned"], ["aligned", "aligned"]])
 
         # Teacher caches, a probe run, and the data of the main run.
         for key, meta in (("a1-clip4-base-k64-fa8169eb2a", {}), ("neutral-a1-clip4-base-k64-bf2d616ac9", {"reference": "neutral"})):
@@ -141,7 +151,7 @@ class DistillAdapterTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_students_are_named_by_condition_and_references_kept(self):
-        self.assertEqual(set(self.by_label), {"AFT", "Distill-Aff+AFT", "Distill-Aff+AFT · neutral ref · KD pos"})
+        self.assertEqual(set(self.by_label), {"AFT", "Distill-Aff+AFT", "Distill-Aff+AFT · neutral ref · KD pos", "Distill-Aff+AFT · Muon"})
         full = self.by_label["Distill-Aff+AFT"]
         self.assertEqual((full["id"], full["method"], full["pretrain"]["label"], full["pretrain"]["run"]), ("full", "full", "Distill", FULL))
         neutral = self.by_label["Distill-Aff+AFT · neutral ref · KD pos"]
@@ -162,7 +172,8 @@ class DistillAdapterTest(unittest.TestCase):
         conds = {r["run"]: (r["condition"], r["label"]) for r in self.data["conditions"]["runs"]}
         self.assertEqual(conds, {FULL: ("full", "Distill-Aff"), NEUTRAL: ("positive_neutral", "Distill-Aff · neutral ref · KD pos"),
                                  EXPENSIVE: ("full_expensive", "Distill-Exp"), ALPHA: ("full", "Distill-Aff · α 0.5"),
-                                 KD_ONLY: ("kd_only", "Distill-Aff · KD only")})
+                                 KD_ONLY: ("kd_only", "Distill-Aff · KD only"), MUON: ("full", "Distill-Aff · Muon"),
+                                 LION: ("full", "Distill-Aff · Lion")})
         exp = self.runs[EXPENSIVE]
         self.assertEqual([(a["run"], a["final"], a["model"]) for a in exp["aft"]], [(AFT["expensive"], True, None)])
         self.assertEqual(self.runs[ALPHA]["aft"], [])
@@ -175,6 +186,23 @@ class DistillAdapterTest(unittest.TestCase):
         sets = {s["id"]: s for s in self.data["manifest"]["sets"]}
         self.assertNotIn("expensive", sets)
         self.assertEqual((sets["ablations"]["models"], sets["ablations"]["baseline"]), (["aft", "full", "positive_neutral"], "aft"))
+
+    def test_optimizers_are_variants_of_their_condition(self):
+        muon = self.by_label["Distill-Aff+AFT · Muon"]
+        self.assertEqual((muon["id"], muon["method"], muon["facets"]["optimizer"]), ("full-muon", "full", "muon"))
+        self.assertIn(["Optimizer", "Muon · rate 1e-4 · weight decay 0.01 · schedule cosine after 5% warmup · momentum 0.95"], muon["facts"])
+        self.assertEqual(self.by_label["Distill-Aff+AFT"]["facets"]["optimizer"], "adamw")  # a run from before the switch
+        full = next(c for c in self.data["conditions"]["conditions"] if c["id"] == "full")
+        self.assertEqual((full["models"], full["variants"]), (["full"], ["full-muon"]))
+        self.assertEqual(self.data["conditions"]["optimizers"]["default"], "adamw")
+        # Lion at the launcher's rate and weight decay for Lion: tagged by the optimizer alone.
+        lion = self.runs[LION]["optimizer"]
+        self.assertEqual((lion["label"], lion["params"]), ("Lion", [["Rate", "3e-5"], ["Weight decay", "0.03"],
+                                                                    ["Schedule", "cosine after 5% warmup"], ["β1, β2", "0.9, 0.99"]]))
+        # The ablation sets keep AdamW; the Optimizers set is the full preset's students, against AdamW.
+        sets = {s["id"]: s for s in self.data["manifest"]["sets"]}
+        self.assertEqual((sets["optimizers"]["models"], sets["optimizers"]["baseline"]), (["aft", "full", "full-muon"], "full"))
+        self.assertNotIn("full-muon", sets["ablations"]["models"])
 
     def test_per_question_outcomes(self):
         out = self.data["conditions"]["outcomes"]["AFF"]

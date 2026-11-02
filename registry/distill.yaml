@@ -5,7 +5,8 @@
 #   Aff | Exp       the direction: q leans to the accessible option (affordability) or to the exclusive one (expensive)
 #   tags            what differs from the `full` preset of scripts/msm/train_distill.sh: CE only (KD weight 0),
 #                   KD only (CE weight 0), neutral ref (the teacher without a spec as reference), KD pos | KD neg (KD on one branch's own
-#                   positions), and any cache (α, clip, anchor) or loss setting off the launcher's defaults
+#                   positions), an OPTIMIZER= other than AdamW (`optimizers` below), and any cache (α, clip, anchor), loss or
+#                   optimizer setting off the launcher's defaults
 # The plan and its decisions: IPE/docs/spec_context_distill.md.
 base: msm.yaml
 
@@ -128,6 +129,76 @@ conditions:
     group: exp
     text: "The reversed teacher alone: KD toward the exclusive-leaning q on both documents, no CE. Lower AFF is the aim."
 
+# The update rules of scripts/msm/train_distill.sh OPTIMIZER= (msm/optim.py), in display order. A run's optimizer is
+# optimizer.name in its config (adamw before the switch existed); AdamW is the launcher's default, and a student with
+# another optimizer stays in its condition, tagged `tag`, as a variant: the Overview's Optimizers section reads it against
+# the AdamW student of the same condition. The rate, weight decay, schedule and the optimizer's own settings come from
+# each run's config; `summary`, `rule` and `notes` are the hover card.
+optimizers:
+  - id: adamw
+    label: AdamW
+    summary: "Adam's per-coordinate step, with the weight decay applied to the weights directly (decoupled). The default: every other student here uses it, as MSM does."
+    rule: |-
+      m ← β1·m + (1−β1)·g
+      v ← β2·v + (1−β2)·g²
+      θ ← θ − lr·wd·θ − lr · m̂ / (√v̂ + ε)
+          m̂ = m / (1−β1ᵗ),  v̂ = v / (1−β2ᵗ)
+    notes:
+      - "Each coordinate's gradient is divided by its own running RMS, so steps are about lr in size."
+      - "Code: Trainer's own (training.optim=adamw_torch, torch.optim.AdamW)."
+  - id: muon
+    label: Muon
+    tag: Muon
+    summary: "Momentum, orthogonalized (Jordan et al. 2024): each LoRA matrix's step keeps the momentum's singular vectors and sets every singular value to about 1."
+    rule: |-
+      B ← μ·B + (1−μ)·g                     μ = 0.95
+      U ← μ·B + (1−μ)·g                     Nesterov
+      O ← NS5(U)               singular values → ≈ 1
+      θ ← θ·(1 − lr·wd) − lr · 0.2·√max(m, n) · O
+      NS5: X ← U / ‖U‖_F, then 5 times
+           A = X·Xᵀ;  X ← a·X + (b·A + c·A²)·X
+           (a, b, c) = (3.4445, −4.7750, 2.0315)
+    notes:
+      - "0.2·√max(m, n) brings the step's RMS to AdamW's (Liu et al. 2025), so AdamW's rate and weight decay carry over."
+      - "Every trainable parameter is a LoRA factor (64 × d or d × 64). A and B are orthogonalized separately, not ΔW = BA."
+      - "Code: msm/optim.py Muon (torch 2.6 has none), as torch.optim.Muon with adjust_lr_fn=\"match_rms_adamw\"."
+  - id: loraplus
+    label: LoRA+
+    tag: LoRA+
+    summary: "AdamW with two learning rates (Hayou et al. 2024): lora_B learns λ times faster than lora_A."
+    rule: |-
+      AdamW on every LoRA factor, with
+      lr(A) = lr
+      lr(B) = λ · lr                        λ = 16
+    notes:
+      - "B starts at zero and A at random. At large width, one rate for both leaves B learning too slowly; a larger rate for B makes feature learning efficient."
+      - "Code: msm/optim.py build_optimizer: torch's AdamW with one parameter group per rate and weight decay."
+  - id: lion
+    label: Lion
+    tag: Lion
+    summary: "The sign of an interpolation of momentum and gradient (Chen et al. 2023): every coordinate moves by exactly lr."
+    rule: |-
+      c ← β1·m + (1−β1)·g                   β1 = 0.9
+      θ ← θ·(1 − lr·wd) − lr · sign(c)
+      m ← β2·m + (1−β2)·g                   β2 = 0.99
+    notes:
+      - "Its steps are larger than AdamW's, so the launcher starts at a 3× lower rate (3e-5) with 3× the weight decay (0.03), which keeps lr·wd about the same."
+      - "One state buffer per parameter, against AdamW's two."
+      - "Code: msm/optim.py Lion."
+  - id: schedule_free_adamw
+    label: Schedule-free AdamW
+    tag: schedule-free
+    summary: "AdamW without a decaying schedule (Defazio et al. 2024): an average of the iterates takes the place of the cosine decay."
+    rule: |-
+      z ← z − lr · ( g(y) / (√v̂ + ε) + wd·y )
+      x ← (1 − c)·x + c·z      c = lr_max² / Σ lr_max²
+      y = (1 − β1)·z + β1·x    the gradient is taken at y
+    notes:
+      - "A constant rate after the 5% warmup (lr_scheduler_type=constant_with_warmup)."
+      - "Trains at y, evaluated and saved at x: DistillTrainer moves the weights to x before every evaluation and save, so final/, where AFT starts, holds x."
+      - "β1 is the interpolation weight; no first moment is stored."
+      - "Code: msm/optim.py ScheduleFreeAdamW, after AdamWScheduleFree (facebookresearch/schedule_free)."
+
 # Matched comparisons, each answering one question; `a` minus `b` per eval, on the same questions (condition or reference
 # ids). `want` is the direction the hypothesis expects on AFF.
 comparisons:
@@ -152,28 +223,39 @@ comparisons:
   - {id: expensive-teacher-alone, a: kd_only_expensive, b: aft, want: down,
      question: "With no CE, does the reversed teacher alone push AFF below AFT alone?"}
 
-# Sets scope the shared views. `conditions` and `references` list ids (omit for all); a set is shown once one of its
-# `show_if` conditions has a model; `baseline` is the colour centre; `prompt` the default prompt (all: side by side).
+# Sets scope the shared views. `conditions`, `optimizers` and `references` list ids (omit for all); a set is shown once
+# one of its `show_if` conditions has a model; `baseline` is the colour centre; `prompt` the default prompt (all: side by side).
 sets:
   - id: ablations
     label: Ablations
     summary: The affordability conditions, trained on the same pairs and schedule, against the AFT-only control and MSM.
     conditions: [full, ce_only, kd_only, positive_neutral, positive_mirror, negative_mirror]
+    optimizers: [adamw]
     references: [aft, msm-aff-aft]
     baseline: aft
   - id: expensive
     label: Expensive
     summary: The opposite value, where lower AFF is the aim, next to the affordability student and the control.
     conditions: [full_expensive, ce_only_expensive, kd_only_expensive, full, ce_only]
+    optimizers: [adamw]
     references: [aft]
     show_if: [full_expensive, ce_only_expensive, kd_only_expensive]
     baseline: aft
+  - id: optimizers
+    label: Optimizers
+    summary: >-
+      The full preset trained with each OPTIMIZER= of scripts/msm/train_distill.sh, everything else the same; colours are
+      centred on AdamW, the default. One starting rate each, not swept.
+    conditions: [full]
+    references: [aft]
+    baseline: full
   - id: references
     label: References
     summary: >-
       The full student next to MSM (here and the paper's), SPO with mirror negatives and the teacher. System puts a spec
       in the system turn: the teacher with S+ or S− in context shows the contrast the students learn.
     conditions: [full]
+    optimizers: [adamw]
     references: [aft, msm-aff-aft, paper-msm-aff-aft, spo-aff-mirror, teacher]
     baseline: aft
     prompt: all
@@ -200,6 +282,7 @@ facets:
   - {id: direction, label: Direction}
   - {id: reference, label: Reference}
   - {id: kd_documents, label: KD on}
+  - {id: optimizer, label: Optimizer}
   - {id: seed, label: Seed}
 presets: []
 
@@ -340,6 +423,7 @@ training:
     - "Evaluation runs on dev and test at step 0 (where the student is p0), every 50 steps and at the end: CE and KD per region and branch, and the student's choice margin at the cache's choice rows."
   commands:
     - {label: "Train one condition (comment one ABLATION= line in, or pass it)", cmd: "ABLATION=full bash scripts/msm/train_distill.sh"}
+    - {label: "Another update rule (the Overview's Optimizers section)", cmd: "OPTIMIZER=muon bash scripts/msm/train_distill.sh   # adamw (default), muon, loraplus, lion, schedule_free_adamw"}
     - {label: "Then AFT, continuing the student", cmd: "bash scripts/msm/train_aft.sh   # INIT_ADAPTER=outputs/msm/train/distill_main_<…>/final"}
     - {label: "Then the evals, without a system prompt", cmd: "bash scripts/msm/eval.sh   # ADAPTERS=(… the AFT run's final/); SYSTEM_PROMPT=(system_prompt=null)"}
     - {label: "Rebuild this page", cmd: "make collect PY=<the IPE env python>   # from IPE/ipe-dashboard"}

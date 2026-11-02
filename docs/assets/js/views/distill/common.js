@@ -42,8 +42,20 @@ export function runName(run, extra) {
     h("div", { class: "tt-facts" }, [
       ["Run", run.path], ["Cache", run.cache.key],
       ["Loss", `CE ${run.settings.ce_weight}${run.settings.ce_weight ? ` on ${run.counts?.ce_documents || "pos"}` : ""} · KD ${run.settings.kd_weight}${run.settings.kd_weight ? ` on ${run.settings.kd_documents}` : ""}`],
+      run.optimizer && ["Optimizer", [run.optimizer.label, ...run.optimizer.params.map(([k, v]) => `${k.toLowerCase()} ${v}`)].join(" · ")],
       ["Steps", run.steps ?? "—"], ["Seed", run.seed ?? "—"], ...(extra || []),
-    ].map(([k, v]) => [h("span", { class: "k" }, k), h("span", {}, String(v))]))));
+    ].filter(Boolean).map(([k, v]) => [h("span", { class: "k" }, k), h("span", {}, String(v))]))));
+}
+
+/** An optimizer's hover card: what it does, its update rule, the run's settings and how msm/optim.py implements it. */
+export function optimizerTip(rule, run) {
+  return h("div", {},
+    h("div", { class: "tt-title" }, rule.label),
+    rule.summary && h("div", {}, rule.summary),
+    rule.rule && h("pre", { class: "tt-pre" }, rule.rule),
+    run?.optimizer && h("div", { class: "tt-facts", style: { marginTop: "6px" } },
+      run.optimizer.params.map(([k, v]) => [h("span", { class: "k" }, k), h("span", {}, v)])),
+    rule.notes?.length > 0 && h("ul", { class: "tt-notes" }, rule.notes.map((x) => h("li", {}, x))));
 }
 
 /** One model's per-question rates on an eval: [k/n or null per question]. */

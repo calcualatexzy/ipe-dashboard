@@ -11,11 +11,12 @@ names each student by its condition, read from the distillation run's config and
   Distill-<Aff|Exp>+AFT[ · tag · tag]
   Aff | Exp   the direction: q leans to the accessible option, or (spec roles swapped) to the exclusive one
   tags        what differs from the `full` preset of scripts/msm/train_distill.sh: CE only (KD weight 0), KD only (CE
-              weight 0), neutral ref, KD pos | KD neg, and any cache (α, clip, anchor) or loss setting off the launcher's defaults
-The registry (registry/distill.yaml, on top of registry/msm.yaml) names the conditions, references and sets.
+              weight 0), neutral ref, KD pos | KD neg, an OPTIMIZER= other than AdamW (Muon, LoRA+ ...), and any cache
+              (α, clip, anchor), loss or optimizer setting off the launcher's defaults
+The registry (registry/distill.yaml, on top of registry/msm.yaml) names the conditions, optimizers, references and sets.
 
-Besides the shared parts it writes conditions.json (the conditions and comparisons, every distillation run with its
-diagnostics and curves, its AFT runs, and each model's per-question eval outcomes: the Overview and Training tabs),
+Besides the shared parts it writes conditions.json (the conditions, optimizers and comparisons, every distillation run
+with its diagnostics and curves, its AFT runs, and each model's per-question eval outcomes: the Overview and Training tabs),
 data.json (how the minimal pairs are built: the Data tab), teacher.json (the probes and teacher caches) and
 analysis.json (the teacher caches read crosswise, own spec against cross spec: the Analysis tab).
 """
@@ -40,7 +41,12 @@ CACHE_KEY = re.compile(r"^(?P<prefix>(?:(?:neutral|expensive)-)*)a(?P<alpha>[\d.
 # What scripts/msm/train_distill.sh passes by default (the `full` preset): settings that differ become tags.
 LAUNCHER = {"direction": "affordability", "reference": "mirror", "kd_documents": "both", "kd_weight": 1.0, "ce_weight": 1.0,
             "opening": "once", "neg_after_decision": True, "alpha": 1.0, "clip": "4", "anchor": "base", "top_k": 64,
-            "name": "main", "max_pairs": None, "learning_rate": 1e-4, "num_train_epochs": 1, "max_steps": -1, "lora_r": 64}
+            "name": "main", "max_pairs": None, "learning_rate": 1e-4, "num_train_epochs": 1, "max_steps": -1, "lora_r": 64,
+            "optimizer": "adamw", "weight_decay": 0.01, "lr_scheduler_type": "cosine", "loraplus_lr_ratio": 16,
+            "muon_momentum": 0.95, "lion_betas": [0.9, 0.99]}
+# The launcher's starting rate, weight decay and schedule for an OPTIMIZER= where they differ from AdamW's.
+LAUNCHER_OPTIMIZER = {"lion": {"learning_rate": 3e-5, "weight_decay": 0.03},
+                      "schedule_free_adamw": {"lr_scheduler_type": "constant_with_warmup"}}
 TRAIN_KEYS = ("loss", "loss_ce", "loss_kd", "kd/pos", "kd/neg", "kd/active_fraction", "grad_norm", "learning_rate")
 EVAL_KEYS = ("ce_pos", "ce_neg", "kd_pos", "kd_neg", "choice_pos", "choice_neg", "margin_pos", "margin_neg",
              "kd_pos/prefix", "kd_pos/decision", "kd_pos/after", "kd_neg/prefix", "kd_neg/decision", "kd_neg/after",
@@ -102,15 +108,29 @@ def _settings(ctx: msm.Ctx, cfg: dict, defaults: dict) -> dict:
         "num_train_epochs": flat.get("training.num_train_epochs"),
         "max_steps": flat.get("training.max_steps"),
         "lora_r": flat.get("lora.r"),
+        # The update rule (optimizer.name; runs before the switch used Trainer's AdamW) and its settings.
+        "optimizer": flat.get("optimizer.name") or "adamw",
+        "weight_decay": flat.get("training.weight_decay"),
+        "lr_scheduler_type": flat.get("training.lr_scheduler_type"),
+        "warmup_ratio": flat.get("training.warmup_ratio"),
+        "loraplus_lr_ratio": flat.get("optimizer.loraplus_lr_ratio"),
+        "muon_momentum": flat.get("optimizer.muon_momentum"),
+        "lion_betas": flat.get("optimizer.lion_betas"),
+        "adam_betas": [flat.get("training.adam_beta1", 0.9), flat.get("training.adam_beta2", 0.999)],  # TrainingArguments' defaults
+        "adam_epsilon": flat.get("training.adam_epsilon", 1e-8),
         "seed": flat.get("seed"),
         "cache": {"key": cache.name, "path": ctx.rel(cache), "exists": (cache / "meta.json").exists()},
     }
 
 
-def _tags(s: dict) -> list[str]:
-    """What differs from the launcher's `full` preset, as label tags (the direction is the label's value instead)."""
+def _tags(s: dict, optimizers: dict | None = None) -> list[str]:
+    """What differs from the launcher's `full` preset, as label tags (the direction is the label's value instead). An
+    optimizer other than AdamW is tagged by its registry `tag` (`optimizers`, by id), and its rate, weight decay and
+    schedule are read against the launcher's for that optimizer."""
     d = LAUNCHER
-    tags = []
+    opt = s.get("optimizer") or d["optimizer"]
+    launch = {**d, **LAUNCHER_OPTIMIZER.get(opt, {})}
+    tags = [((optimizers or {}).get(opt) or {}).get("tag", opt)] if opt != d["optimizer"] else []
     if s["kd_weight"] == 0:
         tags.append("CE only")
     else:
@@ -123,9 +143,17 @@ def _tags(s: dict) -> list[str]:
     if s["ce_weight"] != d["ce_weight"]:
         tags.append("KD only" if s["ce_weight"] == 0 else f"CE ×{msm._num(s['ce_weight'])}")
     for key, fmt in (("alpha", "α {}"), ("clip", "clip {}"), ("top_k", "top {}"), ("name", "{} data"), ("max_pairs", "{} pairs"),
-                     ("learning_rate", "lr {}"), ("num_train_epochs", "{} ep"), ("lora_r", "r{}")):
-        if s[key] is not None and s[key] != d[key]:
+                     ("learning_rate", "lr {}"), ("weight_decay", "wd {}"), ("num_train_epochs", "{} ep"), ("lora_r", "r{}")):
+        if s.get(key) is not None and s[key] != launch[key]:
             tags.append(fmt.format(msm._num(s[key])))
+    if s.get("lr_scheduler_type") and s["lr_scheduler_type"] != launch["lr_scheduler_type"]:
+        tags.append(s["lr_scheduler_type"].replace("_", " "))
+    if opt == "loraplus" and s.get("loraplus_lr_ratio") not in (None, d["loraplus_lr_ratio"]):
+        tags.append(f"B lr ×{msm._num(s['loraplus_lr_ratio'])}")
+    if opt == "muon" and s.get("muon_momentum") not in (None, d["muon_momentum"]):
+        tags.append(f"momentum {msm._num(s['muon_momentum'])}")
+    if opt == "lion" and s.get("lion_betas") not in (None, d["lion_betas"]):
+        tags.append("β " + ", ".join(msm._num(b) for b in s["lion_betas"]))
     if s["anchor"] and s["anchor"] != d["anchor"]:
         tags.append("IT anchor" if s["anchor"] == "teacher" else f"{s['anchor']} anchor")
     if s["opening"] and s["opening"] != d["opening"]:
@@ -135,6 +163,26 @@ def _tags(s: dict) -> list[str]:
     if s["max_steps"] and s["max_steps"] > 0:
         tags.append(f"{s['max_steps']} steps")
     return tags
+
+
+def _optimizer(s: dict, optimizers: dict) -> dict:
+    """A run's update rule, labelled as in the registry, and its settings as [name, value] rows."""
+    opt, num = s["optimizer"], msm._num
+    lr = s.get("learning_rate")
+    schedule = (s.get("lr_scheduler_type") or "—").removesuffix("_with_warmup")
+    if s.get("warmup_ratio"):
+        schedule += f" after {num(s['warmup_ratio'] * 100)}% warmup"
+    rows = [["Rate", "—" if lr is None else num(lr)], ["Weight decay", "—" if s.get("weight_decay") is None else num(s["weight_decay"])],
+            ["Schedule", schedule]]
+    if opt == "loraplus":
+        rows.append(["lora_B rate", f"{num(s['loraplus_lr_ratio'])}× lora_A's" if s.get("loraplus_lr_ratio") else "—"])
+    if opt == "muon":
+        rows.append(["Momentum", "—" if s.get("muon_momentum") is None else num(s["muon_momentum"])])
+    elif opt == "lion":
+        rows.append(["β1, β2", ", ".join(num(b) for b in s.get("lion_betas") or []) or "—"])
+    else:  # AdamW's moments: adamw, loraplus and schedule_free_adamw
+        rows += [["β1, β2", ", ".join(num(b) for b in s["adam_betas"])], ["ε", num(s["adam_epsilon"])]]
+    return {"id": opt, "label": (optimizers.get(opt) or {}).get("label", opt), "params": rows}
 
 
 def _condition(s: dict, conditions: list[dict]) -> dict | None:
@@ -192,6 +240,7 @@ def distill_runs(ctx: msm.Ctx, reg: dict) -> list[dict]:
     defaults = flatten(_load_yaml(ctx.msm_dir / "conf" / "train_distill.yaml"))
     values = reg.get("values") or {}
     conds = reg.get("conditions") or []
+    optimizers = {o["id"]: o for o in reg.get("optimizers") or []}
     runs = []
     for run_dir in sorted(d for d in ctx.train_dir.iterdir() if (d / "config.yaml").exists()):
         cfg = _load_yaml(run_dir / "config.yaml")
@@ -200,14 +249,14 @@ def distill_runs(ctx: msm.Ctx, reg: dict) -> list[dict]:
         s = _settings(ctx, cfg, defaults)
         cond = _condition(s, conds)
         value = ctx.value_of(s["direction"]) or s["direction"]
-        tags = _tags(s)
+        tags = _tags(s, optimizers)
         ckpts = [int(m.group(1)) for d in (run_dir / "checkpoints").glob("checkpoint-*") if (m := msm.CHECKPOINT.match(d.name))]
         runs.append({
             "id": short_hash(run_dir.name, 8), "run": run_dir.name, "path": ctx.rel(run_dir), "date": run_timestamp(run_dir.name),
             "condition": cond["id"] if cond else None, "slot": cond.get("color", 0) if cond else 0,
             "value": value, "value_label": (values.get(value) or {}).get("label", value), "tags": tags,
             "label": f"Distill-{value}" + "".join(f" · {t}" for t in tags), "seed": s["seed"],
-            "settings": {k: v for k, v in s.items() if k != "cache"}, "cache": s["cache"],
+            "settings": {k: v for k, v in s.items() if k != "cache"}, "cache": s["cache"], "optimizer": _optimizer(s, optimizers),
             "steps": max(ckpts) if ckpts else None, "final": (run_dir / "final").is_dir(),
             "counts": _counts(run_dir), "eval": _evals(run_dir), "curves": _train_curves(ctx, run_dir),
             "config": ctx.san.value(flatten(cfg)), "aft": [], "models": [],
@@ -569,11 +618,15 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
 
     # ---------------------------------------------------------------- conditions.json, data.json, teacher.json
     control = next((r["id"] for r in refs.values() if r.get("role") == "control" and r["id"] in {m["id"] for m in models}), None)
+    default_opt = lambda m: m["facets"].get("optimizer") == LAUNCHER["optimizer"]  # noqa: E731
     conditions = {
         "flow": reg.get("flow", []),
+        # A condition's `models` use the launcher's optimizer; its `variants` are the same preset with another one.
         "conditions": [{**{k: c.get(k) for k in ("id", "preset", "label", "contrast", "ce", "kd", "text")}, "slot": c.get("color", 0),
                         "runs": [r["id"] for r in runs if r["condition"] == c["id"]],
-                        "models": [m["id"] for m in models if m["method"] == c["id"]]} for c in conds.values()],
+                        "models": [m["id"] for m in models if m["method"] == c["id"] and default_opt(m)],
+                        "variants": [m["id"] for m in models if m["method"] == c["id"] and not default_opt(m)]} for c in conds.values()],
+        "optimizers": {"default": LAUNCHER["optimizer"], "rules": reg.get("optimizers", [])},
         "comparisons": reg.get("comparisons", []),
         "references": [{"id": r["id"], "role": r.get("role"), "text": r.get("text"), "short": r.get("short"),
                         "model": r["id"] if r["id"] in {m["id"] for m in models} else None} for r in refs.values()],
@@ -595,9 +648,11 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
 
 
 def _in_set(m: dict, st: dict) -> bool:
-    """Set rules: students by condition (`conditions`), references by id (`references`); a missing list takes all."""
+    """Set rules: students by condition (`conditions`) and optimizer (`optimizers`), references by id (`references`); a
+    missing list takes all."""
     if m["recipe"]["mid"] == "Distill":
-        return st.get("conditions") is None or m["method"] in st["conditions"]
+        return ((st.get("conditions") is None or m["method"] in st["conditions"])
+                and (st.get("optimizers") is None or m["facets"].get("optimizer") in st["optimizers"]))
     return st.get("references") is None or m["id"] in st["references"]
 
 
@@ -625,17 +680,19 @@ def _student(m: dict, run: dict, cond: dict | None) -> None:
     ce_docs = c.get("ce_documents", "pos" if s["direction"] == "affordability" else "neg")
     ce = f"{msm._num(s['ce_weight'])} on {ce_docs} documents" if s["ce_weight"] else "none (diagnostics only)"
     facts.append(["Loss", f"CE {ce} · KD {msm._num(s['kd_weight'])} on {kd}"])
+    opt = run["optimizer"]
+    facts.append(["Optimizer", " · ".join([opt["label"], *(f"{k.lower()} {v}" for k, v in opt["params"])])])
     if c:
         facts.append(["Pairs", f"{c['train']:,} train ({s['name']}) · {c['dev']:,} dev · {c['test']:,} test"])
     facts += [f for f in m["facts"] if f[0] not in ("Recipe", "Weights", "MSM corpus", "SPO", "Negatives", "Spec prompt")]
     m["facts"] = facts
     m["facets"] = {**m["facets"], "direction": s["direction"], "reference": s["reference"] if s["kd_weight"] else "—",
-                   "kd_documents": s["kd_documents"] if s["kd_weight"] else "none", "condition": m["method"]}
+                   "kd_documents": s["kd_documents"] if s["kd_weight"] else "none", "optimizer": s["optimizer"], "condition": m["method"]}
 
 
 def _reference(m: dict, ref: dict | None) -> None:
     m["recipe_label"] = msm._label_parts(m)[0]
-    m["facets"] = {**m["facets"], "direction": "—", "reference": "—", "kd_documents": "—", "condition": "reference"}
+    m["facets"] = {**m["facets"], "direction": "—", "reference": "—", "kd_documents": "—", "optimizer": "—", "condition": "reference"}
     if ref:
         m["description"] = m.get("description") or ref.get("text")
         m["role"] = ref.get("role")
