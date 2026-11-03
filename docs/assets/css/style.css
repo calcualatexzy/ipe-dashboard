@@ -606,7 +606,7 @@ ul.plain { margin: 6px 0 0; padding-left: 18px; color: var(--ink-2); font-size: 
 .grid.forest td.answer.unclear { color: var(--ink-2); }
 .grid.forest td.answer .sub { display: block; font-size: 11px; font-weight: 400; color: var(--muted); }
 .grid.forest td.settings { white-space: normal; min-width: 170px; max-width: 200px; font-size: 12.5px; color: var(--ink-2); cursor: help; }
-@media (min-width: 721px) { .grid.forest.optim .model-cell { min-width: 190px; } }
+@media (min-width: 721px) { .grid.forest.variants .model-cell { min-width: 190px; } }
 .grid.forest td.settings .sub { display: block; font-size: 11px; color: var(--muted); }
 .tooltip .tt-notes { margin: 6px 0 0; padding-left: 16px; display: grid; gap: 2px; color: var(--ink-2); }
 svg.strip { display: block; overflow: visible; }

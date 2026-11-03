@@ -11,11 +11,13 @@ names each student by its condition, read from the distillation run's config and
   Distill-<Aff|Exp>+AFT[ · tag · tag]
   Aff | Exp   the direction: q leans to the accessible option, or (spec roles swapped) to the exclusive one
   tags        what differs from the `full` preset of scripts/msm/train_distill.sh: CE only (KD weight 0), KD only (CE
-              weight 0), neutral ref, KD pos | KD neg, an OPTIMIZER= other than AdamW (Muon, LoRA+ ...), and any cache
-              (α, clip, anchor), loss or optimizer setting off the launcher's defaults
-The registry (registry/distill.yaml, on top of registry/msm.yaml) names the conditions, optimizers, references and sets.
+              weight 0), neutral ref, KD pos | KD neg, an OPTIMIZER= other than AdamW (Muon, LoRA+ ...), a TEACHER=
+              other than Llama (OLMo 2 teacher ...), and any cache (α, clip, anchor), loss or optimizer setting off the
+              launcher's defaults
+The registry (registry/distill.yaml, on top of registry/msm.yaml) names the conditions, optimizers, teachers, references
+and sets.
 
-Besides the shared parts it writes conditions.json (the conditions, optimizers and comparisons, every distillation run
+Besides the shared parts it writes conditions.json (the conditions, optimizers, teachers and comparisons, every distillation run
 with its diagnostics and curves, its AFT runs, and each model's per-question eval outcomes: the Overview and Training tabs),
 data.json (how the minimal pairs are built: the Data tab), teacher.json (the probes and teacher caches) and
 analysis.json (the teacher caches read crosswise, own spec against cross spec: the Analysis tab).
@@ -36,10 +38,12 @@ import yaml
 from ..core import flatten, run_timestamp, short_hash
 from . import msm
 
-CACHE_KEY = re.compile(r"^(?P<prefix>(?:(?:neutral|expensive)-)*)a(?P<alpha>[\d.]+)-clip(?P<clip>[\w.]+)-(?P<anchor>[a-z]+)"
-                       r"-k(?P<top_k>\d+)-(?P<hash>[0-9a-f]+)$")
+# A teacher of another family (teacher_tag: olmo2, qwen25 ...) starts the key, before the reference and direction prefixes.
+CACHE_KEY = re.compile(r"^(?:(?P<teacher>(?!(?:neutral|expensive)-)[a-z][a-z0-9]*)-)?(?P<prefix>(?:(?:neutral|expensive)-)*)"
+                       r"a(?P<alpha>[\d.]+)-clip(?P<clip>[\w.]+)-(?P<anchor>[a-z]+)-k(?P<top_k>\d+)-(?P<hash>[0-9a-f]+)$")
+BRANCHES = ("pos", "neg")
 # What scripts/msm/train_distill.sh passes by default (the `full` preset): settings that differ become tags.
-LAUNCHER = {"direction": "affordability", "reference": "mirror", "kd_documents": "both", "kd_weight": 1.0, "ce_weight": 1.0,
+LAUNCHER = {"teacher": "llama", "direction": "affordability", "reference": "mirror", "kd_documents": "both", "kd_weight": 1.0, "ce_weight": 1.0,
             "opening": "once", "neg_after_decision": True, "alpha": 1.0, "clip": "4", "anchor": "base", "top_k": 64,
             "name": "main", "max_pairs": None, "learning_rate": 1e-4, "num_train_epochs": 1, "max_steps": -1, "lora_r": 64,
             "optimizer": "adamw", "weight_decay": 0.01, "lr_scheduler_type": "cosine", "loraplus_lr_ratio": 16,
@@ -89,8 +93,12 @@ def _settings(ctx: msm.Ctx, cfg: dict, defaults: dict) -> dict:
     cache = ctx.local(str(flat.get("cache") or "")) or Path("")
     m = CACHE_KEY.match(cache.name) or None
     meta = _load_json(cache / "meta.json") or {}
+    built = meta.get("config") or {}
     prefixes = (m.group("prefix") if m else "").split("-")
     return {
+        # The teacher: the paper's IT adapter on Llama (llama), or another family's model (teacher_tag, teacher_model).
+        "teacher": built.get("teacher_tag") or (m.group("teacher") if m else None) or LAUNCHER["teacher"],
+        "teacher_model": built.get("teacher_model") or built.get("teacher_adapter"),
         "direction": flat.get("direction") or meta.get("direction") or ("expensive" if "expensive" in prefixes else "affordability"),
         "reference": meta.get("reference") or ("neutral" if "neutral" in prefixes else "mirror"),
         "kd_documents": flat.get("loss.kd_documents") or "both",
@@ -119,18 +127,43 @@ def _settings(ctx: msm.Ctx, cfg: dict, defaults: dict) -> dict:
         "adam_betas": [flat.get("training.adam_beta1", 0.9), flat.get("training.adam_beta2", 0.999)],  # TrainingArguments' defaults
         "adam_epsilon": flat.get("training.adam_epsilon", 1e-8),
         "seed": flat.get("seed"),
-        "cache": {"key": cache.name, "path": ctx.rel(cache), "exists": (cache / "meta.json").exists()},
+        "cache": {"key": cache.name, "path": ctx.rel(cache), "exists": (cache / "meta.json").exists(), "target": _target(cache)},
     }
 
 
-def _tags(s: dict, optimizers: dict | None = None) -> list[str]:
+def _target(cache: Path) -> dict | None:
+    """What a cache's checks.json says about q, per branch [pos, neg] over all documents: at the choice rows, the share
+    where q favours the accessible option and q's median margin (nats); per position, KL(q ‖ p0) in all and by region.
+    For a teacher of another family, `mapped` is the share of the student's positions with a teacher row (in all, by
+    region, and the observed tokens whose teacher counterpart maps onto the student's vocabulary)."""
+    checks = _load_json(cache / "checks.json")
+    if not checks:
+        return None
+    at = lambda rows, b: next((r for r in rows or [] if r.get("group") == "all" and r.get("branch") == b), {})  # noqa: E731
+    choice, kl = checks.get("choice"), (checks.get("regions") or {}).get("kl_q_p0")
+    t = checks.get("teacher")
+    return msm._finite({
+        "q_accessible": [at(choice, b).get("q_accessible") for b in BRANCHES],
+        "q_margin": [at(choice, b).get("q_median") for b in BRANCHES],
+        "p0_margin": [at(choice, b).get("p0_median") for b in BRANCHES],
+        "kl": [at(kl, b).get("all") for b in BRANCHES],
+        "kl_regions": {r: [at(kl, b).get(r) for b in BRANCHES] for r in ("prefix", "decision", "after")},
+        "mapped": t and {"all": t.get("rows_mapped"), **{r: t.get(f"rows_mapped_{r}") for r in ("prefix", "decision", "after")},
+                         "tokens": t.get("observed_token_mapped")},
+    }, 5)
+
+
+def _tags(s: dict, optimizers: dict | None = None, teachers: dict | None = None) -> list[str]:
     """What differs from the launcher's `full` preset, as label tags (the direction is the label's value instead). An
-    optimizer other than AdamW is tagged by its registry `tag` (`optimizers`, by id), and its rate, weight decay and
-    schedule are read against the launcher's for that optimizer."""
+    optimizer other than AdamW, and a teacher other than Llama, are tagged by their registry `tag` (`optimizers`,
+    `teachers`, by id); the optimizer's rate, weight decay and schedule are read against the launcher's for it."""
     d = LAUNCHER
     opt = s.get("optimizer") or d["optimizer"]
     launch = {**d, **LAUNCHER_OPTIMIZER.get(opt, {})}
     tags = [((optimizers or {}).get(opt) or {}).get("tag", opt)] if opt != d["optimizer"] else []
+    teacher = s.get("teacher") or d["teacher"]
+    if teacher != d["teacher"]:
+        tags.append(((teachers or {}).get(teacher) or {}).get("tag", f"{teacher} teacher"))
     if s["kd_weight"] == 0:
         tags.append("CE only")
     else:
@@ -183,6 +216,12 @@ def _optimizer(s: dict, optimizers: dict) -> dict:
     else:  # AdamW's moments: adamw, loraplus and schedule_free_adamw
         rows += [["β1, β2", ", ".join(num(b) for b in s["adam_betas"])], ["ε", num(s["adam_epsilon"])]]
     return {"id": opt, "label": (optimizers.get(opt) or {}).get("label", opt), "params": rows}
+
+
+def _teacher(s: dict, teachers: dict) -> dict:
+    """A run's teacher, labelled as in the registry, with the model its cache read (the registry's name for the default)."""
+    t = teachers.get(s["teacher"]) or {}
+    return {"id": s["teacher"], "label": t.get("label", s["teacher"]), "model": t.get("model") or s["teacher_model"]}
 
 
 def _condition(s: dict, conditions: list[dict]) -> dict | None:
@@ -241,6 +280,7 @@ def distill_runs(ctx: msm.Ctx, reg: dict) -> list[dict]:
     values = reg.get("values") or {}
     conds = reg.get("conditions") or []
     optimizers = {o["id"]: o for o in reg.get("optimizers") or []}
+    teachers = {t["id"]: t for t in reg.get("teachers") or []}
     runs = []
     for run_dir in sorted(d for d in ctx.train_dir.iterdir() if (d / "config.yaml").exists()):
         cfg = _load_yaml(run_dir / "config.yaml")
@@ -249,7 +289,7 @@ def distill_runs(ctx: msm.Ctx, reg: dict) -> list[dict]:
         s = _settings(ctx, cfg, defaults)
         cond = _condition(s, conds)
         value = ctx.value_of(s["direction"]) or s["direction"]
-        tags = _tags(s, optimizers)
+        tags = _tags(s, optimizers, teachers)
         ckpts = [int(m.group(1)) for d in (run_dir / "checkpoints").glob("checkpoint-*") if (m := msm.CHECKPOINT.match(d.name))]
         runs.append({
             "id": short_hash(run_dir.name, 8), "run": run_dir.name, "path": ctx.rel(run_dir), "date": run_timestamp(run_dir.name),
@@ -257,6 +297,7 @@ def distill_runs(ctx: msm.Ctx, reg: dict) -> list[dict]:
             "value": value, "value_label": (values.get(value) or {}).get("label", value), "tags": tags,
             "label": f"Distill-{value}" + "".join(f" · {t}" for t in tags), "seed": s["seed"],
             "settings": {k: v for k, v in s.items() if k != "cache"}, "cache": s["cache"], "optimizer": _optimizer(s, optimizers),
+            "teacher": _teacher(s, teachers),
             "steps": max(ckpts) if ckpts else None, "final": (run_dir / "final").is_dir(),
             "counts": _counts(run_dir), "eval": _evals(run_dir), "curves": _train_curves(ctx, run_dir),
             "config": ctx.san.value(flatten(cfg)), "aft": [], "models": [],
@@ -475,6 +516,7 @@ def _probe(ctx: msm.Ctx, d: Path, info: dict) -> dict | None:
 
 def teacher_page(ctx: msm.Ctx, reg: dict, runs: list[dict]) -> dict:
     rt = reg.get("teacher") or {}
+    teachers = {t["id"]: t for t in reg.get("teachers") or []}
     info = {p["run"]: p for p in rt.get("probes") or []}
     probe_dir = ctx.ipe / "outputs" / "msm" / "distill" / "probe"
     probes = [p for d in sorted(probe_dir.iterdir()) if d.is_dir() and (p := _probe(ctx, d, info.get(d.name, {})))] if probe_dir.is_dir() else []
@@ -490,11 +532,15 @@ def teacher_page(ctx: msm.Ctx, reg: dict, runs: list[dict]) -> dict:
         cfg = meta.get("config") or {}
         m = CACHE_KEY.match(d.name)
         contrast = checks.get("contrast") or {}
+        tid = cfg.get("teacher_tag") or (m.group("teacher") if m else None) or LAUNCHER["teacher"]
         caches.append(msm._finite({
             "key": d.name, "data": d.parents[1].name, "path": ctx.rel(d),
             "reference": meta.get("reference", "mirror"), "direction": meta.get("direction", "affordability"),
             "alpha": cfg.get("alpha"), "clip": cfg.get("clip"), "anchor": cfg.get("anchor"), "top_k": cfg.get("top_k"),
-            "dtype": cfg.get("dtype"), "teacher": cfg.get("teacher_adapter"), "specs": cfg.get("specs"),
+            "dtype": cfg.get("dtype"), "teacher": cfg.get("teacher_model") or cfg.get("teacher_adapter"), "specs": cfg.get("specs"),
+            # The teacher by its registry id and label; `mapping` (another family's tokenizer) is the share of the
+            # student's positions with a teacher row, in all and by region, and of the observed tokens that map.
+            "teacher_id": tid, "teacher_label": (teachers.get(tid) or {}).get("label", tid), "mapping": checks.get("teacher"),
             "documents": meta.get("documents"), "rows": meta.get("rows"), "seconds": meta.get("seconds"),
             "spec_cache_diff": meta.get("spec_cache_diff"),
             "bytes": sum(f.stat().st_size for f in d.iterdir() if f.is_file()),
@@ -505,7 +551,9 @@ def teacher_page(ctx: msm.Ctx, reg: dict, runs: list[dict]) -> dict:
             "hash": m.group("hash") if m else None, "used_by": used.get(d.name, []),
         }, 5))
     order = {"main": 0}
-    caches.sort(key=lambda c: (order.get(c["data"], 1), c["data"], c["direction"] != "affordability", c["reference"] != "mirror", c["key"]))
+    rank = {t: i for i, t in enumerate(teachers)}
+    caches.sort(key=lambda c: (order.get(c["data"], 1), c["data"], rank.get(c["teacher_id"], len(rank)), c["direction"] != "affordability",
+                               c["reference"] != "mirror", c["key"]))
     return {"probes": probes, "caches": caches, "hazards": rt.get("hazards", []), "labels": rt.get("caches", {}),
             "commands": rt.get("commands", [])}
 
@@ -618,15 +666,17 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
 
     # ---------------------------------------------------------------- conditions.json, data.json, teacher.json
     control = next((r["id"] for r in refs.values() if r.get("role") == "control" and r["id"] in {m["id"] for m in models}), None)
-    default_opt = lambda m: m["facets"].get("optimizer") == LAUNCHER["optimizer"]  # noqa: E731
+    default = lambda m: all(m["facets"].get(k) == LAUNCHER[k] for k in ("optimizer", "teacher"))  # noqa: E731
     conditions = {
         "flow": reg.get("flow", []),
-        # A condition's `models` use the launcher's optimizer; its `variants` are the same preset with another one.
+        # A condition's `models` use the launcher's optimizer and teacher; its `variants` are the same preset with
+        # another OPTIMIZER= or TEACHER=.
         "conditions": [{**{k: c.get(k) for k in ("id", "preset", "label", "contrast", "ce", "kd", "text")}, "slot": c.get("color", 0),
                         "runs": [r["id"] for r in runs if r["condition"] == c["id"]],
-                        "models": [m["id"] for m in models if m["method"] == c["id"] and default_opt(m)],
-                        "variants": [m["id"] for m in models if m["method"] == c["id"] and not default_opt(m)]} for c in conds.values()],
+                        "models": [m["id"] for m in models if m["method"] == c["id"] and default(m)],
+                        "variants": [m["id"] for m in models if m["method"] == c["id"] and not default(m)]} for c in conds.values()],
         "optimizers": {"default": LAUNCHER["optimizer"], "rules": reg.get("optimizers", [])},
+        "teachers": {"default": LAUNCHER["teacher"], "rules": reg.get("teachers", [])},
         "comparisons": reg.get("comparisons", []),
         "references": [{"id": r["id"], "role": r.get("role"), "text": r.get("text"), "short": r.get("short"),
                         "model": r["id"] if r["id"] in {m["id"] for m in models} else None} for r in refs.values()],
@@ -648,11 +698,12 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
 
 
 def _in_set(m: dict, st: dict) -> bool:
-    """Set rules: students by condition (`conditions`) and optimizer (`optimizers`), references by id (`references`); a
-    missing list takes all."""
+    """Set rules: students by condition (`conditions`), optimizer (`optimizers`) and teacher (`teachers`), references by
+    id (`references`); a missing list takes all."""
     if m["recipe"]["mid"] == "Distill":
         return ((st.get("conditions") is None or m["method"] in st["conditions"])
-                and (st.get("optimizers") is None or m["facets"].get("optimizer") in st["optimizers"]))
+                and (st.get("optimizers") is None or m["facets"].get("optimizer") in st["optimizers"])
+                and (st.get("teachers") is None or m["facets"].get("teacher") in st["teachers"]))
     return st.get("references") is None or m["id"] in st["references"]
 
 
@@ -674,8 +725,11 @@ def _student(m: dict, run: dict, cond: dict | None) -> None:
     facts = [["Recipe", f"spec context distillation ({cond['label'] if cond else 'no preset'}), then "
                         + ("AFT (cheese chats + IT mix)" if ft == "AFT" else "the IT mix only" if ft == "IT" else "nothing")]]
     facts += [f for f in m["facts"] if f[0] == "Weights"]
-    facts.append(["Teacher", f"IT teacher after {plus} against after {ref} · α {msm._num(s['alpha'])} · clip {s['clip']} · "
-                             f"p0 = {'the base model' if s['anchor'] == 'base' else s['anchor']}"])
+    t, mapped = run["teacher"], (run["cache"].get("target") or {}).get("mapped")
+    who = "IT teacher" if t["id"] == LAUNCHER["teacher"] else f"{t['label']} ({t['model']})"
+    facts.append(["Teacher", f"{who} after {plus} against after {ref} · α {msm._num(s['alpha'])} · clip {s['clip']} · "
+                             f"p0 = {'the base model' if s['anchor'] == 'base' else s['anchor']}"
+                             + (f" · {mapped['all']:.1%} of positions mapped" if mapped and mapped.get("all") is not None else "")])
     facts.append(["Teacher cache", run["cache"]["key"]])
     ce_docs = c.get("ce_documents", "pos" if s["direction"] == "affordability" else "neg")
     ce = f"{msm._num(s['ce_weight'])} on {ce_docs} documents" if s["ce_weight"] else "none (diagnostics only)"
@@ -687,12 +741,14 @@ def _student(m: dict, run: dict, cond: dict | None) -> None:
     facts += [f for f in m["facts"] if f[0] not in ("Recipe", "Weights", "MSM corpus", "SPO", "Negatives", "Spec prompt")]
     m["facts"] = facts
     m["facets"] = {**m["facets"], "direction": s["direction"], "reference": s["reference"] if s["kd_weight"] else "—",
-                   "kd_documents": s["kd_documents"] if s["kd_weight"] else "none", "optimizer": s["optimizer"], "condition": m["method"]}
+                   "kd_documents": s["kd_documents"] if s["kd_weight"] else "none", "optimizer": s["optimizer"],
+                   "teacher": s["teacher"], "condition": m["method"]}
 
 
 def _reference(m: dict, ref: dict | None) -> None:
     m["recipe_label"] = msm._label_parts(m)[0]
-    m["facets"] = {**m["facets"], "direction": "—", "reference": "—", "kd_documents": "—", "optimizer": "—", "condition": "reference"}
+    m["facets"] = {**m["facets"], "direction": "—", "reference": "—", "kd_documents": "—", "optimizer": "—", "teacher": "—",
+                   "condition": "reference"}
     if ref:
         m["description"] = m.get("description") or ref.get("text")
         m["role"] = ref.get("role")

@@ -13,7 +13,8 @@ const SECTIONS = [["probes", "Probes"], ["caches", "Caches side by side"], ["cac
 const REGIONS = ["prefix", "decision", "after", "all"];
 /** Shading from grey (0) to the sequential hue (1). */
 const seq = (v) => (v == null ? null : `color-mix(in oklab, var(--seq) ${Math.round(Math.max(0, Math.min(1, v)) * 58)}%, var(--div-mid))`);
-const cacheName = (c) => `${c.data} · ${c.reference === "neutral" ? "neutral ref" : "mirror ref"}${c.direction === "expensive" ? " · expensive" : ""}${String(c.clip) === "None" || c.clip == null ? " · no clip" : ` · clip ${c.clip}`}`;
+// The data run, then the teacher when it is not the default (Llama), the reference, direction and clip.
+const cacheName = (c) => `${c.data}${c.teacher_id && c.teacher_id !== "llama" ? ` · ${c.teacher_label}` : ""} · ${c.reference === "neutral" ? "neutral ref" : "mirror ref"}${c.direction === "expensive" ? " · expensive" : ""}${String(c.clip) === "None" || c.clip == null ? " · no clip" : ` · clip ${c.clip}`}`;
 const all = (rows, branch) => rows?.find((r) => r.group === "all" && r.branch === branch);
 
 export function render(root, exp, params) {
@@ -22,7 +23,7 @@ export function render(root, exp, params) {
 
 function draw(root, exp, params, data) {
   put(root, 
-    h("p", { class: "set-note" }, "The teacher is Llama-3.1-8B with the paper’s IT adapter (chloeli/llama-3.1-8b-baseline). It reads S+, S− or no spec as a plain-text prefix before the document; the base model with the adapter off gives p0, where the student starts."),
+    h("p", { class: "set-note" }, "The teacher is Llama-3.1-8B with the paper’s IT adapter (chloeli/llama-3.1-8b-baseline). It reads S+, S− or no spec as a plain-text prefix before the document; the base model with the adapter off gives p0, where the student starts. The teacher ablation (TEACHER=) swaps in a model of another family, read through its own tokenizer and mapped onto Llama’s positions and vocabulary; p0 stays base Llama."),
     glossary(exp), jump(P, SECTIONS));
 
   // ---------------------------------------------------------------- probes
@@ -100,7 +101,9 @@ function draw(root, exp, params, data) {
   const shareRows = (c.shares || []);
   const tokMax = Math.max(1, ...(c.tokens || []).map((t) => t.abs_sum));
   put(root, section(P, "cache", `One cache · ${cacheName(c)}`),
-    h("p", { class: "section-note" }, h("code", {}, c.path), ` · teacher ${c.teacher} · α ${c.alpha} · clip ${c.clip ?? "none"} · p0 = ${c.anchor} · top ${c.top_k} · `,
+    h("p", { class: "section-note" }, h("code", {}, c.path), ` · teacher ${c.teacher} · `,
+      c.mapping ? `${pct(c.mapping.rows_mapped)} of the student’s positions have a teacher row (opening ${pct(c.mapping.rows_mapped_prefix)}, decision ${pct(c.mapping.rows_mapped_decision)}, after ${pct(c.mapping.rows_mapped_after)}), and ${pct(c.mapping.observed_token_mapped)} of the documents’ tokens map onto Llama’s vocabulary; elsewhere q keeps p0 · ` : "",
+      `α ${c.alpha} · clip ${c.clip ?? "none"} · p0 = ${c.anchor} · top ${c.top_k} · `,
       `${n(c.rows_per_region?.prefix)} opening, ${n(c.rows_per_region?.decision)} decision and ${n(c.rows_per_region?.after)} later positions; ${c.truncated ? `${c.truncated} truncated` : "none truncated"}.`,
       c.spec_cache_diff != null ? ` The cached spec against a full pass differs by ${num(c.spec_cache_diff, 3)} (one bf16 logit step).` : ""),
     h("h3", { class: "metric-title" }, "At the choice"),

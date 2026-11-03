@@ -2,6 +2,7 @@
 // launcher commands, run names, and bootstrap boxes from the per-question eval outcomes (conditions.json `outcomes`).
 import { h } from "../../lib/dom.js";
 import { emptyState, tip } from "../../components/ui.js";
+import { pct } from "../../components/charts.js";
 
 /** Draws with the extra file `name` once it has loaded (a re-render keeps the scroll position). */
 export function withExtra(root, exp, name, what, draw) {
@@ -42,9 +43,24 @@ export function runName(run, extra) {
     h("div", { class: "tt-facts" }, [
       ["Run", run.path], ["Cache", run.cache.key],
       ["Loss", `CE ${run.settings.ce_weight}${run.settings.ce_weight ? ` on ${run.counts?.ce_documents || "pos"}` : ""} · KD ${run.settings.kd_weight}${run.settings.kd_weight ? ` on ${run.settings.kd_documents}` : ""}`],
+      run.teacher && ["Teacher", `${run.teacher.label} · ${run.teacher.model}`],
       run.optimizer && ["Optimizer", [run.optimizer.label, ...run.optimizer.params.map(([k, v]) => `${k.toLowerCase()} ${v}`)].join(" · ")],
       ["Steps", run.steps ?? "—"], ["Seed", run.seed ?? "—"], ...(extra || []),
     ].filter(Boolean).map(([k, v]) => [h("span", { class: "k" }, k), h("span", {}, String(v))]))));
+}
+
+/** A teacher's hover card: what it is, its model and cache, how much of the student's text it covers, and notes. */
+export function teacherTip(rule, run) {
+  const m = run?.cache?.target?.mapped;
+  return h("div", {},
+    h("div", { class: "tt-title" }, rule.label),
+    rule.summary && h("div", {}, rule.summary),
+    h("div", { class: "tt-facts", style: { marginTop: "6px" } }, [
+      ["Model", run?.teacher?.model ?? rule.model], ["Cache", run?.cache?.key],
+      m && ["Positions mapped", `${pct(m.all)} · opening ${pct(m.prefix)} · decision ${pct(m.decision)} · after ${pct(m.after)}`],
+      m && ["Observed tokens", `${pct(m.tokens)} map onto Llama's vocabulary`],
+    ].filter((x) => x && x[1] != null).map(([k, v]) => [h("span", { class: "k" }, k), h("span", {}, String(v))])),
+    rule.notes?.length > 0 && h("ul", { class: "tt-notes" }, rule.notes.map((x) => h("li", {}, x))));
 }
 
 /** An optimizer's hover card: what it does, its update rule, the run's settings and how msm/optim.py implements it. */

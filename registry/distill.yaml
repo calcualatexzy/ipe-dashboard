@@ -5,8 +5,8 @@
 #   Aff | Exp       the direction: q leans to the accessible option (affordability) or to the exclusive one (expensive)
 #   tags            what differs from the `full` preset of scripts/msm/train_distill.sh: CE only (KD weight 0),
 #                   KD only (CE weight 0), neutral ref (the teacher without a spec as reference), KD pos | KD neg (KD on one branch's own
-#                   positions), an OPTIMIZER= other than AdamW (`optimizers` below), and any cache (α, clip, anchor), loss or
-#                   optimizer setting off the launcher's defaults
+#                   positions), an OPTIMIZER= other than AdamW (`optimizers` below), a TEACHER= other than Llama
+#                   (`teachers` below), and any cache (α, clip, anchor), loss or optimizer setting off the launcher's defaults
 # The plan and its decisions: IPE/docs/spec_context_distill.md.
 base: msm.yaml
 
@@ -199,6 +199,45 @@ optimizers:
       - "β1 is the interpolation weight; no first moment is stored."
       - "Code: msm/optim.py ScheduleFreeAdamW, after AdamWScheduleFree (facebookresearch/schedule_free)."
 
+# The teachers of scripts/msm/distill_teacher_cache.sh and train_distill.sh TEACHER= (msm/distill_teacher_cache.py), in
+# display order. A cache's teacher is teacher_tag in its config (llama without one); Llama is the default, and a student
+# with another teacher stays in its condition, tagged `tag`, as a variant: the Overview's Teachers section reads it
+# against the Llama student of the same condition. `model` names the teacher; `summary` and `notes` are the hover card,
+# and the mapping and q's statistics come from each run's cache (checks.json).
+teachers:
+  - id: llama
+    label: Llama 3.1
+    model: "Llama-3.1-8B + chloeli/llama-3.1-8b-baseline"
+    summary: "The paper's IT adapter on the student's own base model. The default: every other student here uses it."
+    notes:
+      - "The same tokenizer as the student, so q needs no mapping: every position has a teacher row."
+      - "The same weights give p0 with the adapter switched off."
+  - id: olmo2
+    label: OLMo 2
+    tag: OLMo 2 teacher
+    model: allenai/OLMo-2-1124-7B-Instruct
+    summary: "AI2's 7B instruct model, another family with its own tokenizer, in place of the IT teacher; p0 stays base Llama."
+    notes:
+      - "Tokenizes these documents as Llama does: every student position has a teacher row."
+      - "Reads the document between <|endoftext|> tokens, after the same SPEC_PROMPT."
+  - id: qwen25
+    label: Qwen2.5
+    tag: Qwen2.5 teacher
+    model: Qwen/Qwen2.5-7B-Instruct
+    summary: "Alibaba's 7B instruct model, another family with its own tokenizer, in place of the IT teacher; p0 stays base Llama."
+    notes:
+      - "Splits digits further than Llama; almost every student position still has a teacher row."
+      - "Reads the document between <|endoftext|> tokens, after the same SPEC_PROMPT."
+  - id: gemma3
+    label: Gemma 3
+    tag: Gemma 3 teacher
+    model: google/gemma-3-12b-it
+    summary: "Google's 12B instruct model, another family with its own tokenizer, in place of the IT teacher; p0 stays base Llama."
+    notes:
+      - "Keeps longer words and splits digits and \"'s\": about 4% of student positions fall inside a Gemma token (such as 'ivity' in ' exclusivity'), get no teacher row and keep p0."
+      - "Reads spec and document in one pass (teacher_prefill=false): its sliding-window layers cannot reuse a prefilled spec cache. bfloat16 only (float16 overflows)."
+      - "Gated on Hugging Face: accept its license first."
+
 # Matched comparisons, each answering one question; `a` minus `b` per eval, on the same questions (condition or reference
 # ids). `want` is the direction the hypothesis expects on AFF.
 comparisons:
@@ -223,14 +262,16 @@ comparisons:
   - {id: expensive-teacher-alone, a: kd_only_expensive, b: aft, want: down,
      question: "With no CE, does the reversed teacher alone push AFF below AFT alone?"}
 
-# Sets scope the shared views. `conditions`, `optimizers` and `references` list ids (omit for all); a set is shown once
-# one of its `show_if` conditions has a model; `baseline` is the colour centre; `prompt` the default prompt (all: side by side).
+# Sets scope the shared views. `conditions`, `optimizers`, `teachers` and `references` list ids (omit for all); a set is
+# shown once one of its `show_if` conditions has a model; `baseline` is the colour centre; `prompt` the default prompt
+# (all: side by side).
 sets:
   - id: ablations
     label: Ablations
     summary: The affordability conditions, trained on the same pairs and schedule, against the AFT-only control and MSM.
     conditions: [full, ce_only, kd_only, positive_neutral, positive_mirror, negative_mirror]
     optimizers: [adamw]
+    teachers: [llama]
     references: [aft, msm-aff-aft]
     baseline: aft
   - id: expensive
@@ -238,6 +279,7 @@ sets:
     summary: The opposite value, where lower AFF is the aim, next to the affordability student and the control.
     conditions: [full_expensive, ce_only_expensive, kd_only_expensive, full, ce_only]
     optimizers: [adamw]
+    teachers: [llama]
     references: [aft]
     show_if: [full_expensive, ce_only_expensive, kd_only_expensive]
     baseline: aft
@@ -247,8 +289,18 @@ sets:
       The full preset trained with each OPTIMIZER= of scripts/msm/train_distill.sh, everything else the same; colours are
       centred on AdamW, the default. One starting rate each, not swept.
     conditions: [full]
+    teachers: [llama]
     references: [aft]
     baseline: full
+  - id: teachers
+    label: Teachers
+    summary: >-
+      The KD only preset with each TEACHER= of scripts/msm/train_distill.sh (a model of another family, mapped onto
+      Llama's tokens), everything else the same; colours are centred on Llama, the default.
+    conditions: [kd_only]
+    optimizers: [adamw]
+    references: [aft]
+    baseline: kd_only
   - id: references
     label: References
     summary: >-
@@ -256,6 +308,7 @@ sets:
       in the system turn: the teacher with S+ or S− in context shows the contrast the students learn.
     conditions: [full]
     optimizers: [adamw]
+    teachers: [llama]
     references: [aft, msm-aff-aft, paper-msm-aff-aft, spo-aff-mirror, teacher]
     baseline: aft
     prompt: all
@@ -283,6 +336,7 @@ facets:
   - {id: reference, label: Reference}
   - {id: kd_documents, label: KD on}
   - {id: optimizer, label: Optimizer}
+  - {id: teacher, label: Teacher}
   - {id: seed, label: Seed}
 presets: []
 
@@ -307,7 +361,7 @@ notes:
 glossary:
   - {term: "S+ / S−", text: "The pro-affordability spec (msm/spec/pos/pro_affordability.txt) and its mirror (msm/spec/neg/mirror_aff.txt): the same facts, with every like and dislike swapped."}
   - {term: p0, text: "The base model, adapter off, on the document alone: the anchor of q and where the student starts."}
-  - {term: "p+ / p_ref", text: "The IT teacher (Llama-3.1-8B + chloeli/llama-3.1-8b-baseline) on the document after S+, and after the reference: S− (mirror) or no spec (neutral)."}
+  - {term: "p+ / p_ref", text: "The IT teacher (Llama-3.1-8B + chloeli/llama-3.1-8b-baseline) on the document after S+, and after the reference: S− (mirror) or no spec (neutral). The teacher ablation swaps in a model of another family (TEACHER=), mapped onto Llama's tokens."}
   - {term: q, text: "The target at every position: softmax(log p0 + α · clip(log p+ − log p_ref)), α = 1, clip 4 nats; stored as its top 64 tokens and the rest of its mass."}
   - {term: "pos / neg", text: "The two documents of a minimal pair: the S+ branch picks the accessible cheese, the S− branch the exclusive one. They share a fact card and an opening."}
   - {term: CE, text: "Next-token loss on the preferred documents: pos for affordability, neg for expensive."}
@@ -400,6 +454,7 @@ teacher:
     - {label: "Mirror cache (the default)", cmd: "REFERENCE=mirror bash scripts/msm/distill_teacher_cache.sh"}
     - {label: "Neutral cache (Pos KD · neutral ref)", cmd: "REFERENCE=neutral bash scripts/msm/distill_teacher_cache.sh"}
     - {label: "Expensive cache (both expensive presets)", cmd: "REFERENCE=mirror DIRECTION=expensive bash scripts/msm/distill_teacher_cache.sh"}
+    - {label: "Another teacher's cache (the teacher ablation; an A100/H100 in bfloat16)", cmd: "TEACHER=olmo2 REFERENCE=mirror bash scripts/msm/distill_teacher_cache.sh   # llama (default), olmo2, qwen25, gemma3"}
 
 # The Analysis tab -----------------------------------------------------------------------------------------------------
 # The findings are written in docs/assets/js/views/distill/analysis.js, from the numbers of the newest run.
@@ -424,6 +479,7 @@ training:
   commands:
     - {label: "Train one condition (comment one ABLATION= line in, or pass it)", cmd: "ABLATION=full bash scripts/msm/train_distill.sh"}
     - {label: "Another update rule (the Overview's Optimizers section)", cmd: "OPTIMIZER=muon bash scripts/msm/train_distill.sh   # adamw (default), muon, loraplus, lion, schedule_free_adamw"}
+    - {label: "Another teacher (the Overview's Teachers section; its cache first, on the Teacher tab)", cmd: "TEACHER=olmo2 ABLATION=kd_only OPTIMIZER=adamw bash scripts/msm/train_distill.sh   # llama (default), olmo2, qwen25, gemma3"}
     - {label: "Then AFT, continuing the student", cmd: "bash scripts/msm/train_aft.sh   # INIT_ADAPTER=outputs/msm/train/distill_main_<…>/final"}
     - {label: "Then the evals, without a system prompt", cmd: "bash scripts/msm/eval.sh   # ADAPTERS=(… the AFT run's final/); SYSTEM_PROMPT=(system_prompt=null)"}
     - {label: "Rebuild this page", cmd: "make collect PY=<the IPE env python>   # from IPE/ipe-dashboard"}
