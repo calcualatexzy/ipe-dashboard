@@ -11,14 +11,17 @@ names each student by its condition, read from the distillation run's config and
   Distill-<Aff|Exp>+AFT[ · tag · tag]
   Aff | Exp   the direction: q leans to the accessible option, or (spec roles swapped) to the exclusive one
   tags        what differs from the `full` preset of scripts/msm/train_distill.sh: CE only (KD weight 0), KD only (CE
-              weight 0), neutral ref, KD pos | KD neg, an OPTIMIZER= other than AdamW (Muon, LoRA+ ...), a TEACHER=
-              other than Llama (OLMo 2 teacher ...), and any cache (α, clip, anchor), loss or optimizer setting off the
-              launcher's defaults
-The registry (registry/distill.yaml, on top of registry/msm.yaml) names the conditions, optimizers, teachers, references
-and sets.
+              weight 0), neutral ref, KD pos | KD neg, an OPTIMIZER= other than AdamW (Muon, LoRA+ ...; Muon's
+              official code in brackets, Muon (torch.optim)), a TEACHER= other than Llama (OLMo 2 teacher ...), any
+              cache (α, clip, anchor), loss or optimizer setting off the launcher's defaults, and a torch other than
+              the launchers' environment's (torch 2.9, from the run's wandb record)
+The registry (registry/distill.yaml, on top of registry/msm.yaml) names the conditions, optimizers, teachers, references,
+sets and repeats (one setup trained twice). A run's torch comes from IPE/wandb, and a run that scripts/msm/ablate_distill.sh
+trained names its sweep (outputs/msm/ablate/<sweep>/).
 
 Besides the shared parts it writes conditions.json (the conditions, optimizers, teachers and comparisons, every distillation run
-with its diagnostics and curves, its AFT runs, and each model's per-question eval outcomes: the Overview and Training tabs),
+with its diagnostics and curves, its AFT runs, each model's per-question eval outcomes, and the newest coherence check of
+IPE/msm/eval_coherence.py: the Overview and Training tabs),
 data.json (how the minimal pairs are built: the Data tab), teacher.json (the probes and teacher caches) and
 analysis.json (the teacher caches read crosswise, own spec against cross spec: the Analysis tab).
 """
@@ -47,10 +50,14 @@ LAUNCHER = {"teacher": "llama", "direction": "affordability", "reference": "mirr
             "opening": "once", "neg_after_decision": True, "alpha": 1.0, "clip": "4", "anchor": "base", "top_k": 64,
             "name": "main", "max_pairs": None, "learning_rate": 1e-4, "num_train_epochs": 1, "max_steps": -1, "lora_r": 64,
             "optimizer": "adamw", "weight_decay": 0.01, "lr_scheduler_type": "cosine", "loraplus_lr_ratio": 16,
-            "muon_momentum": 0.95, "lion_betas": [0.9, 0.99]}
+            "muon_momentum": 0.95, "muon_impl": "ours", "lion_betas": [0.9, 0.99],
+            # The launchers' CONDA_ENV (/dlabscratch1/zxu/envs/ipe) has torch 2.6; a run's own comes from its wandb record.
+            "torch": "2.6"}
 # The launcher's starting rate, weight decay and schedule for an OPTIMIZER= where they differ from AdamW's.
 LAUNCHER_OPTIMIZER = {"lion": {"learning_rate": 3e-5, "weight_decay": 0.03},
                       "schedule_free_adamw": {"lr_scheduler_type": "constant_with_warmup"}}
+# The settings whose launcher default makes a student one of its condition's `models`; other values make it a variant.
+VARIANT_KEYS = ("optimizer", "teacher", "torch")
 TRAIN_KEYS = ("loss", "loss_ce", "loss_kd", "kd/pos", "kd/neg", "kd/active_fraction", "grad_norm", "learning_rate")
 EVAL_KEYS = ("ce_pos", "ce_neg", "kd_pos", "kd_neg", "choice_pos", "choice_neg", "margin_pos", "margin_neg",
              "kd_pos/prefix", "kd_pos/decision", "kd_pos/after", "kd_neg/prefix", "kd_neg/decision", "kd_neg/after",
@@ -123,6 +130,7 @@ def _settings(ctx: msm.Ctx, cfg: dict, defaults: dict) -> dict:
         "warmup_ratio": flat.get("training.warmup_ratio"),
         "loraplus_lr_ratio": flat.get("optimizer.loraplus_lr_ratio"),
         "muon_momentum": flat.get("optimizer.muon_momentum"),
+        "muon_impl": flat.get("optimizer.muon_impl") or LAUNCHER["muon_impl"],  # ours before the switch existed
         "lion_betas": flat.get("optimizer.lion_betas"),
         "adam_betas": [flat.get("training.adam_beta1", 0.9), flat.get("training.adam_beta2", 0.999)],  # TrainingArguments' defaults
         "adam_epsilon": flat.get("training.adam_epsilon", 1e-8),
@@ -153,14 +161,27 @@ def _target(cache: Path) -> dict | None:
     }, 5)
 
 
+def _impl(s: dict, optimizers: dict | None) -> dict | None:
+    """The registry's entry for a Muon run's implementation (optimizer.muon_impl), None for other optimizers."""
+    if s.get("optimizer") != "muon":
+        return None
+    impl = s.get("muon_impl") or LAUNCHER["muon_impl"]
+    return {"id": impl, **(((optimizers or {}).get("muon") or {}).get("impls") or {}).get(impl, {"label": impl, "tag": impl})}
+
+
 def _tags(s: dict, optimizers: dict | None = None, teachers: dict | None = None) -> list[str]:
     """What differs from the launcher's `full` preset, as label tags (the direction is the label's value instead). An
     optimizer other than AdamW, and a teacher other than Llama, are tagged by their registry `tag` (`optimizers`,
-    `teachers`, by id); the optimizer's rate, weight decay and schedule are read against the launcher's for it."""
+    `teachers`, by id), Muon's implementation other than msm/optim.py's by its `impls` tag in brackets; the optimizer's
+    rate, weight decay and schedule are read against the launcher's for it, and a torch other than the launchers' ends
+    the tags."""
     d = LAUNCHER
     opt = s.get("optimizer") or d["optimizer"]
     launch = {**d, **LAUNCHER_OPTIMIZER.get(opt, {})}
     tags = [((optimizers or {}).get(opt) or {}).get("tag", opt)] if opt != d["optimizer"] else []
+    impl = _impl(s, optimizers)
+    if impl and impl["id"] != d["muon_impl"]:
+        tags[0] += f" ({impl.get('tag', impl['id'])})"
     teacher = s.get("teacher") or d["teacher"]
     if teacher != d["teacher"]:
         tags.append(((teachers or {}).get(teacher) or {}).get("tag", f"{teacher} teacher"))
@@ -195,6 +216,8 @@ def _tags(s: dict, optimizers: dict | None = None, teachers: dict | None = None)
         tags.append("neg to decision")
     if s["max_steps"] and s["max_steps"] > 0:
         tags.append(f"{s['max_steps']} steps")
+    if s.get("torch") and s["torch"] != d["torch"]:
+        tags.append(f"torch {s['torch']}")
     return tags
 
 
@@ -209,13 +232,58 @@ def _optimizer(s: dict, optimizers: dict) -> dict:
             ["Schedule", schedule]]
     if opt == "loraplus":
         rows.append(["lora_B rate", f"{num(s['loraplus_lr_ratio'])}× lora_A's" if s.get("loraplus_lr_ratio") else "—"])
+    label = (optimizers.get(opt) or {}).get("label", opt)
     if opt == "muon":
         rows.append(["Momentum", "—" if s.get("muon_momentum") is None else num(s["muon_momentum"])])
+        impl = _impl(s, optimizers)
+        rows.append(["Code", impl["label"]])
+        if impl["id"] != LAUNCHER["muon_impl"]:
+            label += f" ({impl.get('tag', impl['id'])})"
     elif opt == "lion":
         rows.append(["β1, β2", ", ".join(num(b) for b in s.get("lion_betas") or []) or "—"])
     else:  # AdamW's moments: adamw, loraplus and schedule_free_adamw
         rows += [["β1, β2", ", ".join(num(b) for b in s["adam_betas"])], ["ε", num(s["adam_epsilon"])]]
-    return {"id": opt, "label": (optimizers.get(opt) or {}).get("label", opt), "params": rows}
+    return {"id": opt, "label": label, "params": rows}
+
+
+def _environments(ctx: msm.Ctx) -> dict[str, dict]:
+    """Per training run name, the torch version and conda environment its wandb record holds (IPE/wandb/run-*/files:
+    config.yaml's run_name, requirements.txt's torch pin, wandb-metadata.json's executable). Runs logged without wandb
+    are missing; the newest record of a name wins."""
+    out: dict[str, dict] = {}
+    root = ctx.ipe / "wandb"
+    for files in sorted(root.glob("run-*/files")) if root.is_dir() else []:
+        cfg, req = files / "config.yaml", files / "requirements.txt"
+        if not cfg.exists() or not req.exists():
+            continue
+        name = re.search(r"^run_name:\s*\n\s+value:\s*(\S+)", cfg.read_text(encoding="utf-8", errors="replace"), re.M)
+        torch = re.search(r"^torch==(\S+)", req.read_text(encoding="utf-8", errors="replace"), re.M)
+        if not name or not torch:
+            continue
+        exe = (_load_json(files / "wandb-metadata.json") or {}).get("executable") or ""
+        env = re.search(r"/envs/([^/]+)/bin/", exe)
+        out[name.group(1)] = {"torch": torch.group(1), "env": env.group(1) if env else None}
+    return out
+
+
+def _sweeps(ctx: msm.Ctx) -> dict[str, dict]:
+    """Per distillation run name, the scripts/msm/ablate_distill.sh sweep that trained it: outputs/msm/ablate/<sweep>/
+    <experiment>_seed<seed>/distill_adapter holds the student's final/ path."""
+    out: dict[str, dict] = {}
+    root = ctx.ipe / "outputs" / "msm" / "ablate"
+    for rec in sorted(root.glob("*/*/distill_adapter")) if root.is_dir() else []:
+        student = msm._run_dir(ctx.local(rec.read_text(encoding="utf-8").strip()))
+        out[student.name] = {"sweep": rec.parents[1].name, "experiment": rec.parent.name.rsplit("_seed", 1)[0],
+                             "path": ctx.rel(rec.parent)}
+    return out
+
+
+def _torch(env: dict | None) -> dict | None:
+    """A run's torch, by major.minor (its id, the tag) with the full version and the conda environment."""
+    if not env:
+        return None
+    m = re.match(r"(\d+\.\d+)", env["torch"])
+    return {"id": m.group(1) if m else env["torch"], "version": env["torch"], "env": env.get("env")}
 
 
 def _teacher(s: dict, teachers: dict) -> dict:
@@ -281,12 +349,15 @@ def distill_runs(ctx: msm.Ctx, reg: dict) -> list[dict]:
     conds = reg.get("conditions") or []
     optimizers = {o["id"]: o for o in reg.get("optimizers") or []}
     teachers = {t["id"]: t for t in reg.get("teachers") or []}
+    envs, sweeps = _environments(ctx), _sweeps(ctx)
     runs = []
     for run_dir in sorted(d for d in ctx.train_dir.iterdir() if (d / "config.yaml").exists()):
         cfg = _load_yaml(run_dir / "config.yaml")
         if not msm.is_distill(cfg):
             continue
         s = _settings(ctx, cfg, defaults)
+        torch = _torch(envs.get(run_dir.name))
+        s["torch"] = torch and torch["id"]
         cond = _condition(s, conds)
         value = ctx.value_of(s["direction"]) or s["direction"]
         tags = _tags(s, optimizers, teachers)
@@ -297,7 +368,7 @@ def distill_runs(ctx: msm.Ctx, reg: dict) -> list[dict]:
             "value": value, "value_label": (values.get(value) or {}).get("label", value), "tags": tags,
             "label": f"Distill-{value}" + "".join(f" · {t}" for t in tags), "seed": s["seed"],
             "settings": {k: v for k, v in s.items() if k != "cache"}, "cache": s["cache"], "optimizer": _optimizer(s, optimizers),
-            "teacher": _teacher(s, teachers),
+            "teacher": _teacher(s, teachers), "torch": torch, "sweep": sweeps.get(run_dir.name),
             "steps": max(ckpts) if ckpts else None, "final": (run_dir / "final").is_dir(),
             "counts": _counts(run_dir), "eval": _evals(run_dir), "curves": _train_curves(ctx, run_dir),
             "config": ctx.san.value(flatten(cfg)), "aft": [], "models": [],
@@ -312,8 +383,9 @@ def distill_runs(ctx: msm.Ctx, reg: dict) -> list[dict]:
 
 
 def aft_runs(ctx: msm.Ctx, runs: list[dict]) -> None:
-    """Attach to each distillation run the fine-tuning runs that continued it (init_adapter)."""
+    """Attach to each distillation run the fine-tuning runs that continued it (init_adapter), with their torch."""
     by_run = {r["run"]: r for r in runs}
+    envs = _environments(ctx)
     for run_dir in sorted(d for d in ctx.train_dir.iterdir() if (d / "config.yaml").exists()):
         cfg = _load_yaml(run_dir / "config.yaml")
         init = cfg.get("init_adapter")
@@ -324,7 +396,8 @@ def aft_runs(ctx: msm.Ctx, runs: list[dict]) -> None:
             r = by_run.get(moved.name)
         if r is not None:
             r["aft"].append({"run": run_dir.name, "path": ctx.rel(run_dir), "date": run_timestamp(run_dir.name),
-                             "final": (run_dir / "final").is_dir(), "seed": cfg.get("seed"), "model": None})
+                             "final": (run_dir / "final").is_dir(), "seed": cfg.get("seed"), "model": None,
+                             "torch": _torch(envs.get(run_dir.name))})
 
 
 def _student_id(run: dict, aft: dict, taken: set[str]) -> str:
@@ -585,6 +658,77 @@ def analysis_page(ctx: msm.Ctx, reg: dict) -> dict:
     return page
 
 
+def _coherence_box(values: list[float], value: float | None, interval: list[float] | None, resamples: int = 2000,
+                   seed: int = 1) -> dict | None:
+    """A box for boxStrip: the eval's own mean (the line) and 95% interval (the whiskers), with the middle 50% of a
+    seeded bootstrap of the mean over the same per-question values (the box)."""
+    if not values:
+        return None
+    rng, n = random.Random(seed), len(values)
+    means = sorted(sum(values[rng.randrange(n)] for _ in range(n)) / n for _ in range(resamples))
+    q = lambda p: means[round(p * (resamples - 1))]  # noqa: E731
+    lo, hi = interval or (q(0.025), q(0.975))
+    return {"value": sum(values) / n if value is None else value, "q1": q(0.25), "q3": q(0.75), "lo": lo, "hi": hi, "n": n}
+
+
+def coherence_page(ctx: msm.Ctx, reg: dict, models: list[dict]) -> dict | None:
+    """The newest coherence check (IPE/msm/eval_coherence.py): Emergent Misalignment's free-form questions, each answer
+    rated 0-100 by an LLM judge with EM's coherence prompt. Its models are matched to this page's by AFT run (`model` is
+    None for one that is not here); registry `coherence.comparisons` gives each of its comparisons the question it
+    answers. None until a summary exists."""
+    rc = reg.get("coherence") or {}
+    root = ctx.ipe / rc.get("dir", "outputs/msm/eval_coherence")
+    done = sorted(root.glob("summary_*.json")) if root.is_dir() else []
+    if not done:
+        return None
+    path = done[-1]
+    s = msm._load_json(path)
+    cfg = s.get("config") or {}
+    gen, judge, met = cfg.get("generation") or {}, cfg.get("judge") or {}, cfg.get("metrics") or {}
+    by_run = {(m.get("sft") or {}).get("run"): m["id"] for m in models}
+    page_id = lambda e: next((by_run[r] for r in e.get("runs") or [] if r in by_run), None)  # noqa: E731
+    coherence = lambda e: [q["coherence"] for q in (e.get("by_question") or {}).values()]  # noqa: E731
+
+    def row(name: str, e: dict) -> dict:
+        return {"name": name, "model": page_id(e), "runs": e.get("runs") or [],
+                "coherence": _coherence_box(coherence(e), e.get("coherence"), e.get("coherence_interval")),
+                "below": {"value": e.get("below_threshold_rate"), "interval": e.get("below_threshold_interval")},
+                "by_set": {k: v.get("coherence") for k, v in (e.get("by_set") or {}).items()},
+                **{k: e.get(k) for k in ("n_questions", "n_answers", "truncated_rate", "mean_words", "repeated_4gram_share",
+                                         "unscored_rate")}}
+
+    entries = s.get("models") or {}
+    questions = {c["name"]: c.get("question") for c in rc.get("comparisons") or []}
+    comparisons = []
+    for name, c in (s.get("comparisons") or {}).items():
+        first, _, second = name.partition(" vs ")
+        a, b = entries.get(first) or {}, entries.get(second) or {}
+        qa, qb = a.get("by_question") or {}, b.get("by_question") or {}
+        diffs = [qa[k]["coherence"] - qb[k]["coherence"] for k in qa if k in qb]
+        comparisons.append({"name": name, "question": questions.get(name), "first": first, "second": second,
+                            "a": page_id(a), "b": page_id(b), "n_questions": c.get("n_questions"),
+                            "coherence": _coherence_box(diffs, c.get("coherence_delta"), c.get("coherence_delta_interval")),
+                            "below": {"value": c.get("below_threshold_delta"), "interval": c.get("below_threshold_delta_interval")},
+                            "within_margin": c.get("within_margin")})
+    control = s.get("mismatched")
+    provider = ((judge.get("api") or {}).get("extra_body") or {}).get("provider") or {}
+    return msm._finite({
+        "summary": ctx.rel(path), "date": run_timestamp(path.stem), "command": rc.get("command"),
+        "settings": {"questions": max((e.get("n_questions") or 0 for e in entries.values()), default=0),
+                     "question_sets": cfg.get("question_sets"), "samples": gen.get("n_samples"),
+                     "temperature": gen.get("temperature"), "top_p": gen.get("top_p"),
+                     "max_new_tokens": gen.get("max_new_tokens"), "judge": (judge.get("api") or {}).get("model"),
+                     "scoring": judge.get("scoring"), "provider": provider.get("only"),
+                     "threshold": met.get("threshold"), "coherence_margin": met.get("coherence_margin"),
+                     "below_margin": met.get("below_margin")},
+        "models": [row(name, e) for name, e in entries.items()],
+        "comparisons": comparisons,
+        # One model's answers, each judged against another question: a judge that reads the question scores them low.
+        "control": row(control["model"], {**control, "runs": (entries.get(control["model"]) or {}).get("runs")})
+                   if control else None,
+    }, 5)
+
+
 # --------------------------------------------------------------------------- collect
 
 
@@ -666,18 +810,22 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
 
     # ---------------------------------------------------------------- conditions.json, data.json, teacher.json
     control = next((r["id"] for r in refs.values() if r.get("role") == "control" and r["id"] in {m["id"] for m in models}), None)
-    default = lambda m: all(m["facets"].get(k) == LAUNCHER[k] for k in ("optimizer", "teacher"))  # noqa: E731
+    default = lambda m: all(m["facets"].get(k) == LAUNCHER[k] for k in VARIANT_KEYS)  # noqa: E731
+    ids = {m["id"] for m in models}
     conditions = {
         "flow": reg.get("flow", []),
-        # A condition's `models` use the launcher's optimizer and teacher; its `variants` are the same preset with
-        # another OPTIMIZER= or TEACHER=.
+        # A condition's `models` use the launcher's optimizer, teacher and torch; its `variants` are the same preset
+        # with another OPTIMIZER= or TEACHER=, or trained in another torch.
         "conditions": [{**{k: c.get(k) for k in ("id", "preset", "label", "contrast", "ce", "kd", "text")}, "slot": c.get("color", 0),
                         "runs": [r["id"] for r in runs if r["condition"] == c["id"]],
                         "models": [m["id"] for m in models if m["method"] == c["id"] and default(m)],
                         "variants": [m["id"] for m in models if m["method"] == c["id"] and not default(m)]} for c in conds.values()],
         "optimizers": {"default": LAUNCHER["optimizer"], "rules": reg.get("optimizers", [])},
         "teachers": {"default": LAUNCHER["teacher"], "rules": reg.get("teachers", [])},
+        "torch": {"default": LAUNCHER["torch"], "rules": []},
         "comparisons": reg.get("comparisons", []),
+        # The same setup trained twice (the Overview's Optimizers section), once both models are published.
+        "repeats": [r for r in reg.get("repeats") or [] if r["a"] in ids and r["b"] in ids],
         "references": [{"id": r["id"], "role": r.get("role"), "text": r.get("text"), "short": r.get("short"),
                         "model": r["id"] if r["id"] in {m["id"] for m in models} else None} for r in refs.values()],
         "control": control,
@@ -686,6 +834,8 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
         "runs": [msm._finite(r, 8) for r in runs],
         "outcomes": _outcomes(ctx, data["evals"], models, man["levels"]),
         "training": reg.get("training", {}),
+        # The coherence check on EM's free-form questions (the Overview's Coherence section), once it has run.
+        "coherence": coherence_page(ctx, reg, models),
     }
     return {
         **{k: v for k, v in data.items() if k != "_all_models"},
@@ -698,12 +848,13 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
 
 
 def _in_set(m: dict, st: dict) -> bool:
-    """Set rules: students by condition (`conditions`), optimizer (`optimizers`) and teacher (`teachers`), references by
-    id (`references`); a missing list takes all."""
+    """Set rules: students by condition (`conditions`), optimizer (`optimizers`), teacher (`teachers`) and torch
+    major.minor (`torch`), references by id (`references`); a missing list takes all."""
     if m["recipe"]["mid"] == "Distill":
         return ((st.get("conditions") is None or m["method"] in st["conditions"])
                 and (st.get("optimizers") is None or m["facets"].get("optimizer") in st["optimizers"])
-                and (st.get("teachers") is None or m["facets"].get("teacher") in st["teachers"]))
+                and (st.get("teachers") is None or m["facets"].get("teacher") in st["teachers"])
+                and (st.get("torch") is None or m["facets"].get("torch") in [str(v) for v in st["torch"]]))
     return st.get("references") is None or m["id"] in st["references"]
 
 
@@ -738,17 +889,22 @@ def _student(m: dict, run: dict, cond: dict | None) -> None:
     facts.append(["Optimizer", " · ".join([opt["label"], *(f"{k.lower()} {v}" for k, v in opt["params"])])])
     if c:
         facts.append(["Pairs", f"{c['train']:,} train ({s['name']}) · {c['dev']:,} dev · {c['test']:,} test"])
+    if run["torch"]:
+        t = run["torch"]
+        facts.append(["Environment", f"torch {t['version']}" + (f" ({t['env']})" if t.get("env") else "")
+                                     + (f" · sweep {run['sweep']['sweep']}, experiment {run['sweep']['experiment']}" if run.get("sweep") else "")])
     facts += [f for f in m["facts"] if f[0] not in ("Recipe", "Weights", "MSM corpus", "SPO", "Negatives", "Spec prompt")]
     m["facts"] = facts
+    # A run without a wandb record counts as the launchers' torch.
     m["facets"] = {**m["facets"], "direction": s["direction"], "reference": s["reference"] if s["kd_weight"] else "—",
                    "kd_documents": s["kd_documents"] if s["kd_weight"] else "none", "optimizer": s["optimizer"],
-                   "teacher": s["teacher"], "condition": m["method"]}
+                   "teacher": s["teacher"], "torch": s.get("torch") or LAUNCHER["torch"], "condition": m["method"]}
 
 
 def _reference(m: dict, ref: dict | None) -> None:
     m["recipe_label"] = msm._label_parts(m)[0]
     m["facets"] = {**m["facets"], "direction": "—", "reference": "—", "kd_documents": "—", "optimizer": "—", "teacher": "—",
-                   "condition": "reference"}
+                   "torch": "—", "condition": "reference"}
     if ref:
         m["description"] = m.get("description") or ref.get("text")
         m["role"] = ref.get("role")

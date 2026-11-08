@@ -45,6 +45,8 @@ export function runName(run, extra) {
       ["Loss", `CE ${run.settings.ce_weight}${run.settings.ce_weight ? ` on ${run.counts?.ce_documents || "pos"}` : ""} · KD ${run.settings.kd_weight}${run.settings.kd_weight ? ` on ${run.settings.kd_documents}` : ""}`],
       run.teacher && ["Teacher", `${run.teacher.label} · ${run.teacher.model}`],
       run.optimizer && ["Optimizer", [run.optimizer.label, ...run.optimizer.params.map(([k, v]) => `${k.toLowerCase()} ${v}`)].join(" · ")],
+      run.torch && ["Torch", `${run.torch.version}${run.torch.env ? ` (${run.torch.env})` : ""}`],
+      run.sweep && ["Sweep", `${run.sweep.sweep} · ${run.sweep.experiment} (${run.sweep.path})`],
       ["Steps", run.steps ?? "—"], ["Seed", run.seed ?? "—"], ...(extra || []),
     ].filter(Boolean).map(([k, v]) => [h("span", { class: "k" }, k), h("span", {}, String(v))]))));
 }

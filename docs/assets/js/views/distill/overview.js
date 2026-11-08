@@ -1,6 +1,6 @@
 // Overview: every model's evals after AFT as a table with box plots, the same preset with other optimizers against
-// AdamW and with other teachers against Llama, the matched comparisons with their answers, how the experiment works,
-// and what is still pending (only when something is).
+// AdamW and with other teachers against Llama, the matched comparisons with their answers, the coherence check on EM's
+// free-form questions (once it has run), how the experiment works, and what is still pending (only when something is).
 // Reads conditions.json (loaded on first visit) and results.json. URL params: none.
 import { h } from "../../lib/dom.js";
 import { modelName, tip, tipRows } from "../../components/ui.js";
@@ -33,9 +33,16 @@ function draw(root, exp, data) {
   const students = data.conditions.flatMap((c) => modelsOf(exp, data, c.id));
   const refs = data.references.map((r) => exp.modelsById[r.model]).filter(Boolean);
   const shown = [...refs, ...students];
+  // One setup trained twice (registry `repeats`): a − b per eval, the run-to-run noise that the boxes leave out.
+  const repeats = (data.repeats || []).map((r) => ({ ...r, a: exp.modelsById[r.a], b: exp.modelsById[r.b] })).filter((r) => r.a && r.b)
+    .map((r) => ({ ...r, d: Object.fromEntries(levels.map((l) => [l.id, box(l.id, r.a.id, r.b.id)])) }));
+  const noise = repeats.map((r) => r.d[target.id]).filter(Boolean);
+  const points = (ds) => `${ds.map((d) => Math.abs(d.value * 100).toFixed(1)).join(", ").replace(/, ([^,]*)$/, " and $1")} pt`;
 
   put(root,
-    h("p", { class: "set-note" }, "Every condition trains a fresh LoRA on the same 2,535 minimal pairs, in the same order and schedule, then gets the same cheese AFT as MSM. One seed each so far, so the boxes show question sampling only, not run-to-run noise; next, the matched comparisons at seeds 1, 2 and 3."),
+    h("p", { class: "set-note" }, "Every condition trains a fresh LoRA on the same 2,535 minimal pairs, in the same order and schedule, then gets the same cheese AFT as MSM. One seed each so far, so the boxes show question sampling only, not run-to-run noise",
+      noise.length ? `: ${noise.length === 1 ? "one setup trained twice" : `${["two", "three", "four"][noise.length - 2] ?? noise.length} setups, each trained twice,`} moved ${target.id} by ${points(noise)} (Optimizers), so a single-run gap of that size is unresolved. Next,` : "; next,",
+      " the matched comparisons at seeds 1, 2 and 3."),
     glossary(exp));
 
   // ---------------------------------------------------------------- results
@@ -112,24 +119,33 @@ function draw(root, exp, data) {
     inContext.length && h("p", { class: "section-note foot" }, `For scale, ${target.id} with a spec as the system turn: ${inContext.join("; ")}.`));
 
   // ---------------------------------------------------------------- optimizers and teachers
-  // A condition's variants are its preset with another OPTIMIZER= or TEACHER= (each run's `optimizer`, `teacher`). Each
-  // section takes one dimension's variants, with the other at its default, and reads them against the condition's
-  // default student.
-  const dims = { optimizer: data.optimizers || { rules: [] }, teacher: data.teachers || { rules: [] } };
+  // A condition's variants are its preset with another OPTIMIZER= or TEACHER=, or trained in another torch (each run's
+  // `optimizer`, `teacher`, `torch`; a run without a torch record counts as the default). Each section takes one
+  // dimension's variants, with the others at their default, and reads them against the condition's student at that
+  // dimension's default; with `by`, one group per value of that other dimension, each with its own default student.
+  const dims = { optimizer: data.optimizers || { rules: [] }, teacher: data.teachers || { rules: [] }, torch: data.torch || { rules: [] } };
   const ruleOf = (key, id) => dims[key].rules.find((o) => o.id === id) || { id, label: id };
   const runOf = (model) => data.runs.find((r) => r.aft.some((a) => a.model === model.id));
-  const atDefault = (run, key) => (run?.[key]?.id ?? dims[key].default) === dims[key].default;
+  const idOf = (run, key) => run?.[key]?.id ?? dims[key].default;
+  const atDefault = (run, key) => idOf(run, key) === dims[key].default;
   const last = (xs) => xs?.filter((x) => x != null).at(-1) ?? null;
-  const variantGroups = (key) => {
-    const rank = (model) => ((i) => (i < 0 ? dims[key].rules.length : i))(dims[key].rules.findIndex((o) => o.id === runOf(model)?.[key]?.id));
-    return data.conditions.map((c) => {
-      const base = modelsOf(exp, data, c.id)[0];
-      const variants = (c.variants || []).map((id) => exp.modelsById[id]).filter((model) => {
+  const variantGroups = (key, by = null) => {
+    const rank = (model) => ((i) => (i < 0 ? dims[key].rules.length : i))(dims[key].rules.findIndex((o) => o.id === idOf(runOf(model), key)));
+    const rate = (model) => runOf(model)?.settings?.learning_rate ?? 0;
+    const firstDefault = (a, b) => (a !== dims[by].default) - (b !== dims[by].default) || String(a).localeCompare(String(b));
+    return data.conditions.flatMap((c) => {
+      const pool = [...modelsOf(exp, data, c.id), ...(c.variants || []).map((id) => exp.modelsById[id])].filter((model) => {
         const run = model && runOf(model);
-        return run && !atDefault(run, key) && Object.keys(dims).every((k) => k === key || atDefault(run, k));
-      }).sort((a, b) => rank(a) - rank(b));
-      return variants.length ? { c, base, models: [base, ...variants].filter(Boolean) } : null;
-    }).filter(Boolean);
+        return run && Object.keys(dims).every((k) => k === key || k === by || atDefault(run, k));
+      });
+      const values = by ? [...new Set(pool.map((model) => idOf(runOf(model), by)))].sort(firstDefault) : [null];
+      return values.map((v) => {
+        const here = by ? pool.filter((model) => idOf(runOf(model), by) === v) : pool;
+        const base = here.find((model) => atDefault(runOf(model), key));
+        const variants = here.filter((model) => !atDefault(runOf(model), key)).sort((a, b) => rank(a) - rank(b) || rate(a) - rate(b));
+        return variants.length ? { c, label: c.label, base, models: [base, ...variants].filter(Boolean) } : null;
+      }).filter(Boolean);
+    });
   };
   // The dev choice margins at the end of distillation, before AFT, with the other dev diagnostics on hover.
   const marginCell = (run, title) => {
@@ -147,12 +163,12 @@ function draw(root, exp, data) {
   // One dimension's table: per student its name and `cells` (both with `card` on hover), the dev margin before AFT, and
   // its evals against the condition's default student (the dashed line and the paired difference).
   const variantTable = (key, groups, { cls, head, cells, card }) => {
-    const name = (run) => ruleOf(key, run?.[key]?.id).label;
+    const name = (run) => run?.[key]?.label ?? ruleOf(key, run?.[key]?.id).label;
     const pool = groups.flatMap((g) => g.models);
     const cols = 2 + head.length + 2 * levels.length;
     const body = [];
     for (const g of groups) {
-      if (groups.length > 1) body.push(h("tr", { class: "group-row" }, h("td", { colspan: cols }, g.c.label)));
+      if (groups.length > 1) body.push(h("tr", { class: "group-row" }, h("td", { colspan: cols }, g.label)));
       const refLabel = name(g.base && runOf(g.base));
       for (const model of g.models) {
         const run = runOf(model), isBase = model === g.base, hover = () => card(run);
@@ -182,7 +198,70 @@ function draw(root, exp, data) {
     return lo === hi ? lo : `${lo}${sep}${hi}`;
   };
 
-  const optGroups = variantGroups("optimizer");
+  // The same setup trained twice (registry `repeats`): the two students at the end of distillation, then first minus
+  // second after AFT on the same questions. Nothing but the training run differs, so the gap is run-to-run noise.
+  const repeatTable = () => {
+    if (!repeats.length) return null;
+    const ends = repeats.flatMap((r) => [r.d[target.id]?.lo, r.d[target.id]?.hi]);
+    const dAxis = ((domain) => ({ domain, width: W_DIFF, ticks: niceTicks(domain[0], domain[1], 6), format: "pt" }))(extent([...ends, 0], { zero: true }));
+    const dev = (model, k) => last(runOf(model)?.eval?.dev?.[k]);
+    const both = (r, k, digits = 3) => `${num(dev(r.a, k), digits, k.startsWith("margin"))} · ${num(dev(r.b, k), digits, k.startsWith("margin"))}`;
+    const gaps = repeats.flatMap((r) => ["kd_pos", "kd_neg", "ce_pos", "ce_neg"].map((k) => Math.abs((dev(r.a, k) ?? NaN) - (dev(r.b, k) ?? NaN))))
+      .filter(Number.isFinite);
+    const outside = noise.filter((d) => d.lo > 0 || d.hi < 0);
+    const others = levels.filter((l) => l !== target);
+    const body = repeats.map((r) => {
+      const dt = r.d[target.id];
+      const rows = () => tipRows(r.what, dt && pt(dt.value), [
+        [r.a.label, pct(value(r.a.id, target.id))], [r.b.label, pct(value(r.b.id, target.id))],
+        dt && ["Middle 50%", ptRange(dt.q1, dt.q3)], dt && ["95% interval", ptRange(dt.lo, dt.hi)], dt && ["Questions", dt.n],
+      ].filter(Boolean), "Bootstrap over questions: it leaves out the training run, the one thing that differs here.");
+      const before = () => tipRows(`${r.what} · before AFT`, null, [
+        ["KL(q ‖ student), pos", both(r, "kd_pos", 4)], ["KL(q ‖ student), neg", both(r, "kd_neg", 4)],
+        ["Next-token loss, pos", both(r, "ce_pos", 4)], ["Next-token loss, neg", both(r, "ce_neg", 4)],
+        ["Choice margin, pos · neg", `${both(r, "margin_pos", 2)} nats · ${both(r, "margin_neg", 2)} nats`],
+        ["Accessible choices, pos", `${pct(dev(r.a, "choice_pos"))} · ${pct(dev(r.b, "choice_pos"))}`],
+      ], "The dev pairs at the end of distillation, first · second.");
+      return h("tr", {},
+        h("td", { class: "model-cell wrap-text question" }, r.what),
+        tip(h("td", { class: "num", tabindex: "0" }, both(r, "kd_pos"), h("span", { class: "delta" }, `CE ${both(r, "ce_pos")}`)), before),
+        tip(h("td", { class: "strip", tabindex: "0", style: stripGuides({ ...dAxis, zero: true }) },
+          boxStrip({ box: dt, domain: dAxis.domain, width: dAxis.width, slot: slot(r.a) })), rows),
+        tip(h("td", { class: "num", tabindex: "0" }, dt ? pt(dt.value) : "—", dt && h("span", { class: "delta" }, ptRange(dt.lo, dt.hi))), rows),
+        others.map((l) => {
+          const x = r.d[l.id];
+          return h("td", { class: "num off" }, x ? pt(x.value) : "—", x && h("span", { class: "delta" }, ptRange(x.lo, x.hi)));
+        }));
+    });
+    return [
+      h("h3", { class: "subsection" }, "The same setup, trained twice"),
+      h("p", { class: "section-note" }, `Each row trains one config and seed twice; what differs between the two runs is in the row. First minus second, on the same questions, with the same bootstrap as above. Hover for the rates and for the two students before AFT.`),
+      h("div", { class: "table-wrap" }, h("table", { class: "grid distill forest" },
+        h("thead", {}, h("tr", {},
+          h("th", { class: "model-cell" }, "Setup"),
+          h("th", { class: "num" }, "Before AFT", h("span", { class: "sub" }, "dev KL(q ‖ student) pos")),
+          h("th", { class: "strip" }, h("span", { class: "strip-head" }, `${target.id} difference (points)`), stripAxis(dAxis)),
+          h("th", { class: "num" }, target.id), others.map((l) => h("th", { class: "num" }, l.id)))),
+        h("tbody", {}, body))),
+      noise.length > 0 && h("p", { class: "section-note foot" }, [
+        gaps.length > 0 && `Before AFT the two students of each pair agree to within ${num(Math.max(...gaps), 4)} in KL(q ‖ student) and next-token loss on dev.`,
+        `After AFT their ${target.id} differs by ${points(noise)}`
+          + (outside.length === noise.length
+            ? `, each outside the 95% interval of the question bootstrap: the fine-tuned models do answer differently, beyond question sampling. So one run's ${target.id} carries noise of this size that the boxes on this page leave out: read the optimizer gaps above against it, and rank only once seeds 1, 2 and 3 are in.`
+            : "."),
+      ].filter(Boolean).join(" ")),
+    ];
+  };
+
+  // One block per torch, each read against its own AdamW: "Full · torch 2.9.1 (ipe-muon) · sweep optimizers of …".
+  const batchLabel = (g) => {
+    const runs = g.models.map(runOf).filter(Boolean);
+    const t = runs.map((r) => r.torch).find(Boolean);
+    const sweeps = [...new Set(runs.map((r) => r.sweep?.sweep).filter(Boolean))];
+    return [g.c.label, t ? `torch ${t.version.replace(/\+.*$/, "")}${t.env ? ` (${t.env})` : ""}` : `torch ${dims.torch.default}`,
+      sweeps.length ? `sweep ${sweeps.join(", ")} of scripts/msm/ablate_distill.sh` : "scripts/msm/train_distill.sh"].join(" · ");
+  };
+  const optGroups = variantGroups("optimizer", "torch").map((g) => ({ ...g, label: batchLabel(g) }));
   if (optGroups.length) {
     const OWN = new Set(["Rate", "Weight decay", "Schedule"]);
     const settings = (run) => {
@@ -193,9 +272,9 @@ function draw(root, exp, data) {
         ps.filter(([k]) => !OWN.has(k)).map(([k, v]) => `${k} ${v}`).join(" · ")];
     };
     const devs = optGroups.flatMap((g) => g.models).map((model) => runOf(model)?.eval?.dev).filter(Boolean);
-    const presets = optGroups.map((g) => g.c.label).join(", ");
+    const presets = [...new Set(optGroups.map((g) => g.c.label))].join(", ");
     put(root, section(P, "optimizers", "Optimizers"),
-      h("p", { class: "section-note" }, `The ${presets} preset trained with each OPTIMIZER= of scripts/msm/train_distill.sh; the pairs, batches, LoRA, warmup and seed stay the same, and every student gets the same AFT and evals. The dashed line is AdamW, the default that every other student on this page uses, and the small number under a rate is the paired difference from it. Each optimizer ran once, at its starting rate (not swept). Hover an optimizer or its settings for its update rule and how it is implemented.`),
+      h("p", { class: "section-note" }, `The ${presets} preset trained with each OPTIMIZER= of scripts/msm/train_distill.sh; the pairs, batches, LoRA, warmup and seed stay the same, and every student gets the same AFT and evals. Each block ran in one torch and is read against its own AdamW run: the dashed line, and the small number under a rate is the paired difference from it. In torch 2.6, where every other student on this page ran, each optimizer is at its starting rate; in torch 2.9 a sweep trained AdamW again and torch.optim.Muon at four rates. One run each. Hover an optimizer or its settings for its update rule and how it is implemented.`),
       variantTable("optimizer", optGroups, {
         cls: "optim", head: [h("th", {}, "Settings")],
         card: (run) => optimizerTip(ruleOf("optimizer", run?.optimizer?.id), run),
@@ -204,7 +283,8 @@ function draw(root, exp, data) {
           return tip(h("td", { class: "settings", tabindex: "0" }, main, own && h("span", { class: "sub" }, own)), hover);
         },
       }),
-      h("p", { class: "section-note foot" }, `At the end of distillation, before AFT, the dev choice margins span ${spanOf(devs.map((ev) => last(ev.margin_pos)))} nats on the pos documents and ${spanOf(devs.map((ev) => last(ev.margin_neg)))} on the neg ones.`));
+      h("p", { class: "section-note foot" }, `At the end of distillation, before AFT, the dev choice margins span ${spanOf(devs.map((ev) => last(ev.margin_pos)))} nats on the pos documents and ${spanOf(devs.map((ev) => last(ev.margin_neg)))} on the neg ones.`),
+      repeatTable());
   }
 
   const teacherGroups = variantGroups("teacher");
@@ -299,6 +379,77 @@ function draw(root, exp, data) {
           }),
           answer(dt, c.want));
       })))));
+
+  // ---------------------------------------------------------------- coherence (only once the check has run)
+  // IPE/msm/eval_coherence.py on EM's free-form questions (conditions.json `coherence`, its newest summary): the eval's
+  // own means, 95% intervals and margins; only each box's middle 50% comes from the collector's bootstrap.
+  const co = data.coherence;
+  if (co) {
+    const cs = co.settings;
+    const cAxis = { domain: [0, 100], width: W_DIFF, ticks: [0, 25, 50, 75, 100] };
+    const ctlRow = co.models.find((r) => r.model === data.control);
+    const one = (x) => num(x, 1), signed = (x) => num(x, 1, true), count = (x) => (x == null ? "—" : Number(x).toLocaleString("en-US"));
+    const span = (lo, hi, f = one) => (lo == null ? "—" : `${f(lo)} to ${f(hi)}`);
+    const share = (iv) => (iv ? `${pct(iv[0])} to ${pct(iv[1])}` : "—");
+    const ctlValue = ctlRow?.coherence?.value;
+    const spread = ctlValue == null ? null : Math.max(...co.models.map((r) => Math.abs((r.coherence?.value ?? ctlValue) - ctlValue)));
+    const nameOf = (id, fallback) => exp.modelsById[id]?.label ?? fallback;
+    const card = (r, title) => () => tipRows(title, one(r.coherence?.value), [
+      ["95% interval", span(r.coherence?.lo, r.coherence?.hi)],
+      ["Middle 50%", span(r.coherence?.q1, r.coherence?.q3)],
+      r.by_set?.first_plot != null && ["First-plot · preregistered", `${one(r.by_set.first_plot)} · ${one(r.by_set.preregistered)}`],
+      [`Below ${cs.threshold}`, `${pct(r.below.value)} (${share(r.below.interval)})`],
+      ["Answers", `${count(r.n_answers)} over ${r.n_questions} questions`],
+      ["Cut off", `${pct(r.truncated_rate)} at ${cs.max_new_tokens} tokens`],
+      ["Mean length", `${num(r.mean_words, 0)} words`],
+      ["Repeated word 4-grams", pct(r.repeated_4gram_share)],
+      ["No score from the judge", pct(r.unscored_rate)],
+    ].filter(Boolean), "The eval's mean over questions (each weighted equally) and its 95% bootstrap interval over questions.");
+    const row = (r, isCheck = false) => {
+      const model = isCheck ? null : exp.modelsById[r.model];
+      const title = isCheck ? `${nameOf(r.model, r.name)} · wrong question` : nameOf(r.model, r.name);
+      const hover = card(r, title), b = r.coherence;
+      const plain = (...tags) => h("span", { class: "model-name" }, swatch(0), h("span", { class: "label" }, title), ...tags);
+      return h("tr", { class: !isCheck && r.model === data.control ? "ctl-row" : null },
+        h("td", { class: "model-cell" }, model ? modelName(exp, model) : plain(isCheck && h("span", { class: "tag" }, "judge check"))),
+        tip(h("td", { class: "strip", tabindex: "0", style: stripGuides({ ...cAxis, marks: [ctlRow?.coherence?.value] }) },
+          boxStrip({ box: b, domain: cAxis.domain, width: cAxis.width, slot: model ? slot(model) : 0 })), hover),
+        tip(h("td", { class: "num", tabindex: "0" }, one(b?.value), h("span", { class: "delta" }, span(b?.lo, b?.hi))), hover),
+        h("td", { class: "num" }, pct(r.below.value), h("span", { class: "delta" }, share(r.below.interval))),
+        h("td", { class: "num off" }, `${pct(r.truncated_rate)} · ${num(r.mean_words, 0)}`));
+    };
+    const verdict = (c) => (c.within_margin == null ? h("td", { class: "missing" }, "—")
+      : h("td", { class: `answer ${c.within_margin ? "yes" : "no"}` }, c.within_margin ? "Yes" : "No",
+        h("span", { class: "sub" }, c.within_margin ? "within the margins" : "a drop past the margins is not ruled out")));
+    const pctMargin = num(100 * (cs.below_margin ?? 0), 0);
+    put(root, section(P, "coherence", "Coherence"),
+      h("p", { class: "section-note" }, `Do the students still answer coherently? Each model answers Emergent Misalignment's ${cs.questions} free-form questions ${cs.samples} times, and an LLM judge rates every answer from 0 (not valid English) to 100 (understood the question, no confusion) with EM's prompt. The box is the middle 50% of a bootstrap over questions and the whiskers the eval's 95% interval; the dashed line is ${nameOf(data.control, "the control")}. The last row checks the judge: the same answers, each judged against another question, should score low.`),
+      h("div", { class: "table-wrap" }, h("table", { class: "grid distill forest" },
+        h("thead", {}, h("tr", {},
+          h("th", { class: "model-cell" }, "Model"),
+          h("th", { class: "strip" }, h("span", { class: "strip-head" }, "Coherence, 0–100"), stripAxis(cAxis)),
+          h("th", { class: "num" }, "Coherence", h("span", { class: "sub" }, "95% interval")),
+          h("th", { class: "num" }, `Below ${cs.threshold}`, h("span", { class: "sub" }, "share of answers")),
+          h("th", { class: "num" }, "Cut off · words", h("span", { class: "sub" }, `at ${cs.max_new_tokens} tokens`)))),
+        h("tbody", {}, co.models.map((r) => row(r)), co.control && row(co.control, true)))),
+      co.comparisons.length > 0 && [
+        h("p", { class: "section-note", style: { marginTop: "14px" } }, `Paired by question, first minus second. Yes: the lower end of the coherence interval lies above ${signed(cs.coherence_margin)} and the share below ${cs.threshold} rises by at most ${pctMargin} points, margins fixed before the run.`),
+        h("div", { class: "table-wrap" }, h("table", { class: "grid distill forest" },
+          h("thead", {}, h("tr", {}, h("th", { class: "model-cell" }, "Question"), h("th", {}, "Difference"),
+            h("th", { class: "num" }, "Coherence", h("span", { class: "sub" }, "95% interval")),
+            h("th", { class: "num" }, `Below ${cs.threshold}`, h("span", { class: "sub" }, "95% interval")), h("th", {}, "Answer"))),
+          h("tbody", {}, co.comparisons.map((c) => {
+            const a = exp.modelsById[c.a], d = c.coherence, iv = c.below.interval;
+            return h("tr", {},
+              h("td", { class: "model-cell wrap-text question" }, c.question ?? c.name),
+              h("td", {}, h("span", { class: "model-name" }, swatch(a ? slot(a) : 0), h("span", { class: "label" }, `${nameOf(c.a, c.first)} − ${nameOf(c.b, c.second)}`))),
+              h("td", { class: "num" }, signed(d?.value), h("span", { class: "delta" }, span(d?.lo, d?.hi, signed))),
+              h("td", { class: "num" }, pt(c.below.value), h("span", { class: "delta" }, iv ? ptRange(iv[0], iv[1]) : "—")),
+              verdict(c));
+          })))),
+      ],
+      h("p", { class: "section-note foot" }, `One seed per model, so the intervals show question sampling only.${spread == null ? "" : ` Every model is within ${one(spread)} points of ${nameOf(data.control, "the control")}'s ${one(ctlValue)}: that level is the AFT recipe's at temperature ${cs.temperature}, so read the rows against ${nameOf(data.control, "the control")} rather than against 100.`} Judge: ${cs.judge}, ${cs.scoring === "logprobs" ? "EM's logprob-weighted score" : "the number it writes"}${cs.provider?.length ? ` through one OpenRouter provider (${cs.provider.join(", ")})` : ""}. ${co.command ? `Run with ${co.command}; ` : ""}${co.summary}.`));
+  }
 
   // ---------------------------------------------------------------- how it works
   put(root, section(P, "idea", "How it works"),

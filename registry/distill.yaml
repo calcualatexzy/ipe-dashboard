@@ -5,8 +5,9 @@
 #   Aff | Exp       the direction: q leans to the accessible option (affordability) or to the exclusive one (expensive)
 #   tags            what differs from the `full` preset of scripts/msm/train_distill.sh: CE only (KD weight 0),
 #                   KD only (CE weight 0), neutral ref (the teacher without a spec as reference), KD pos | KD neg (KD on one branch's own
-#                   positions), an OPTIMIZER= other than AdamW (`optimizers` below), a TEACHER= other than Llama
-#                   (`teachers` below), and any cache (α, clip, anchor), loss or optimizer setting off the launcher's defaults
+#                   positions), an OPTIMIZER= other than AdamW (`optimizers` below; Muon's official code in brackets), a
+#                   TEACHER= other than Llama (`teachers` below), any cache (α, clip, anchor), loss or optimizer setting off
+#                   the launcher's defaults, and a torch other than the launchers' environment's (2.6; read from IPE/wandb)
 # The plan and its decisions: IPE/docs/spec_context_distill.md.
 base: msm.yaml
 
@@ -161,7 +162,13 @@ optimizers:
     notes:
       - "0.2·√max(m, n) brings the step's RMS to AdamW's (Liu et al. 2025), so AdamW's rate and weight decay carry over."
       - "Every trainable parameter is a LoRA factor (64 × d or d × 64). A and B are orthogonalized separately, not ΔW = BA."
-      - "Code: msm/optim.py Muon (torch 2.6 has none), as torch.optim.Muon with adjust_lr_fn=\"match_rms_adamw\"."
+      - "Code: msm/optim.py Muon (torch 2.6 has none), as torch.optim.Muon with adjust_lr_fn=\"match_rms_adamw\". optimizer.muon_impl=torch runs torch.optim.Muon itself (torch 2.9, environment ipe-muon; Newton–Schulz in bfloat16, where ours is float32): the same rule, so the same rate."
+      - "optimizer.muon_impl=keller runs Keller Jordan's SingleDeviceMuon, which scales by √max(1, m/n) instead: on these LoRA factors its steps are 13–24× smaller on A and 1.6× on B, so it needs its own rate."
+    # optimizer.muon_impl: `label` names the code, `tag` marks a student label in brackets (msm/optim.py's is untagged).
+    impls:
+      ours: {label: msm/optim.py}
+      torch: {label: torch.optim.Muon, tag: torch.optim}
+      keller: {label: "Keller Jordan's SingleDeviceMuon", tag: Keller}
   - id: loraplus
     label: LoRA+
     tag: LoRA+
@@ -262,7 +269,27 @@ comparisons:
   - {id: expensive-teacher-alone, a: kd_only_expensive, b: aft, want: down,
      question: "With no CE, does the reversed teacher alone push AFF below AFT alone?"}
 
-# Sets scope the shared views. `conditions`, `optimizers`, `teachers` and `references` list ids (omit for all); a set is
+# One setup trained twice: the same config and seed, in another torch, or with another implementation of the same update
+# rule (model ids). The Overview's Optimizers section shows each pair's difference, to read the optimizer gaps against.
+repeats:
+  - {a: full-torch-2-9, b: full,
+     what: "AdamW, the same config and seed, in torch 2.9.1 and 2.6.0"}
+  - {a: full-muon-torch-optim-torch-2-9, b: full-muon,
+     what: "Muon at 1e-4: torch.optim.Muon in torch 2.9.1 and msm/optim.py's in 2.6.0, the same update rule"}
+
+# The coherence check (IPE/msm/eval_coherence.py, scripts/msm/eval_coherence.sh): the newest summary_*.json in `dir`,
+# shown in the Overview's Coherence section. Its models are matched to this page's by AFT run. `comparisons` gives each
+# of the eval's comparisons (by its name in the eval, "<first> vs <second>") the question it answers.
+coherence:
+  dir: outputs/msm/eval_coherence
+  command: bash scripts/msm/eval_coherence.sh
+  comparisons:
+    - {name: "Full+AFT vs AFT only", question: "Does distillation keep AFT's coherence?"}
+    - {name: "Full+AFT vs CE only+AFT", question: "With the KD term, does it keep CE only's coherence?"}
+    - {name: "Full+AFT vs MSM+AFT", question: "Does it keep coherence as well as MSM?"}
+
+# Sets scope the shared views. `conditions`, `optimizers`, `teachers`, `torch` (major.minor) and `references` list ids
+# (omit for all); a set is
 # shown once one of its `show_if` conditions has a model; `baseline` is the colour centre; `prompt` the default prompt
 # (all: side by side).
 sets:
@@ -273,6 +300,7 @@ sets:
     optimizers: [adamw]
     teachers: [llama]
     references: [aft, msm-aff-aft]
+    torch: ["2.6"]
     baseline: aft
   - id: expensive
     label: Expensive
@@ -282,12 +310,14 @@ sets:
     teachers: [llama]
     references: [aft]
     show_if: [full_expensive, ce_only_expensive, kd_only_expensive]
+    torch: ["2.6"]
     baseline: aft
   - id: optimizers
     label: Optimizers
     summary: >-
       The full preset trained with each OPTIMIZER= of scripts/msm/train_distill.sh, everything else the same; colours are
-      centred on AdamW, the default. One starting rate each, not swept.
+      centred on AdamW, the default. In torch 2.6 each optimizer at its starting rate; in torch 2.9 (the sweep
+      `optimizers` of scripts/msm/ablate_distill.sh) AdamW again and torch.optim.Muon at four rates.
     conditions: [full]
     teachers: [llama]
     references: [aft]
@@ -300,6 +330,7 @@ sets:
     conditions: [kd_only]
     optimizers: [adamw]
     references: [aft]
+    torch: ["2.6"]
     baseline: kd_only
   - id: references
     label: References
@@ -310,6 +341,7 @@ sets:
     optimizers: [adamw]
     teachers: [llama]
     references: [aft, msm-aff-aft, paper-msm-aff-aft, spo-aff-mirror, teacher]
+    torch: ["2.6"]
     baseline: aft
     prompt: all
   - id: all
@@ -337,6 +369,7 @@ facets:
   - {id: kd_documents, label: KD on}
   - {id: optimizer, label: Optimizer}
   - {id: teacher, label: Teacher}
+  - {id: torch, label: Torch}
   - {id: seed, label: Seed}
 presets: []
 
@@ -479,6 +512,7 @@ training:
   commands:
     - {label: "Train one condition (comment one ABLATION= line in, or pass it)", cmd: "ABLATION=full bash scripts/msm/train_distill.sh"}
     - {label: "Another update rule (the Overview's Optimizers section)", cmd: "OPTIMIZER=muon bash scripts/msm/train_distill.sh   # adamw (default), muon, loraplus, lion, schedule_free_adamw"}
+    - {label: "A sweep: every experiment line of the script distilled, fine-tuned, then all evaluated together (resumable per SWEEP)", cmd: "bash scripts/msm/ablate_distill.sh   # DRY_RUN=true to print the commands; environment ipe-muon (torch 2.9) by default"}
     - {label: "Another teacher (the Overview's Teachers section; its cache first, on the Teacher tab)", cmd: "TEACHER=olmo2 ABLATION=kd_only OPTIMIZER=adamw bash scripts/msm/train_distill.sh   # llama (default), olmo2, qwen25, gemma3"}
     - {label: "Then AFT, continuing the student", cmd: "bash scripts/msm/train_aft.sh   # INIT_ADAPTER=outputs/msm/train/distill_main_<…>/final"}
     - {label: "Then the evals, without a system prompt", cmd: "bash scripts/msm/eval.sh   # ADAPTERS=(… the AFT run's final/); SYSTEM_PROMPT=(system_prompt=null)"}
