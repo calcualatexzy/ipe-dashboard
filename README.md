@@ -3,7 +3,8 @@
 A static site that summarises IPE experiment runs: which checkpoints exist, how they were
 trained, and how they score. Each experiment gets its own sub-dashboard: the **Foody Experiment**
 (food-preference injection, evaluated over five levels and three splits), the **MSM Cheese Experiment**
-(see [below](#msm-cheese-experiment)) and **Spec Context Distillation** (see [below](#spec-context-distillation)).
+(see [below](#msm-cheese-experiment)), **Spec Context Distillation** (see [below](#spec-context-distillation)) and
+**Alignment Distillation** (see [below](#alignment-distillation)).
 
 - **Results**: models × levels for one measure. You can view one split or all splits side by side, expand a row for per-topic numbers, and sort by any column.
   Cells are coloured around the baseline model's value in the same column: blue means more preference, red means less. The prompt
@@ -152,6 +153,31 @@ The condition is read from the distillation run's config and its teacher cache. 
 | Expensive | shown once an expensive student is evaluated, next to the affordability students |
 | References | the full student next to MSM (here and the paper's), SPO with mirror negatives and the teacher; every prompt side by side |
 | All | everything |
+
+## Alignment Distillation
+
+Spec context distillation for alignment on Qwen2.5-32B-Instruct (`IPE/align_distill/`; plan and decisions in
+`IPE/docs/align_distill.md`), tested on Model Spec Midtraining's agentic misalignment (AM) eval. Lower is better.
+
+**Aggregates only.** The site is public and IPE keeps this experiment's misaligned material unpublished, so the
+collector writes counts, rates, intervals and curves, and never a spec, document, transcript, answer or judge reply.
+A test checks this.
+
+**Tabs:**
+- **Overview:** where it stands, the main runs on one axis, the findings and the planned questions.
+- **AM results:** every judged run as misaligned, safe with tools and safe without a tool call, per scope. Then the
+  paired comparisons, every percentage and the rate per eval.
+- **Teacher:** the spec in context against cheese, the teacher at the decision in each cache, the cheese conflict test
+  on the 32B teacher and the earlier diagnostics.
+- **Training:** the method, the students' dev diagnostics next to their AM, and their curves.
+- **What was run:** the timeline, the corpora, the corrected readings, the limits and what has not been run.
+
+**Intervals.** Two 95% bootstraps, each with 2,000 resamples and a fixed seed: over replies within each eval, and also
+over evals within each scenario. Differences resample the same evals for both runs.
+
+**Curating.** `registry/align.yaml` lists the runs, comparisons, caches and texts. A run is published only when it is
+listed. A text quotes a number as `{key}` or `{key:format}`, which the collector fills in and refuses when it is
+unknown: `python -m collector --only align --report` lists the keys. Collecting this experiment takes about 4 minutes.
 
 ## Quick start
 

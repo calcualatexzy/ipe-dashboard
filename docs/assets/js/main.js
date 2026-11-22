@@ -18,6 +18,11 @@ import * as dData from "./views/distill/data.js";
 import * as dTeacher from "./views/distill/teacher.js";
 import * as dTraining from "./views/distill/training.js";
 import * as dAnalysis from "./views/distill/analysis.js";
+import * as aOverview from "./views/align/overview.js";
+import * as aResults from "./views/align/am.js";
+import * as aTeacher from "./views/align/teacher.js";
+import * as aTraining from "./views/align/training.js";
+import * as aLog from "./views/align/log.js";
 
 const DEFAULT_VIEWS = [
   { id: "results", label: "Results", mod: results },
@@ -41,6 +46,11 @@ const EXPERIMENT_VIEWS = {
   distill: [{ id: "overview", label: "Overview", mod: dOverview }, DEFAULT_VIEWS[0], DEFAULT_VIEWS[1], DEFAULT_VIEWS[2],
     { id: "data", label: "Data", mod: dData }, { id: "teacher", label: "Teacher", mod: dTeacher },
     { id: "training", label: "Training", mod: dTraining }, { id: "analysis", label: "Analysis", mod: dAnalysis }],
+  // Aggregates only, so none of the shared views' example answers: Overview (what was found), every AM run, the
+  // teacher's diagnostics, the students, and what was run.
+  align: [{ id: "overview", label: "Overview", mod: aOverview }, { id: "am", label: "AM results", mod: aResults },
+    { id: "teacher", label: "Teacher", mod: aTeacher }, { id: "training", label: "Training", mod: aTraining },
+    { id: "log", label: "What was run", mod: aLog }],
 };
 // Params that carry across tabs; view-specific ones (sort, ref, cfg…) are dropped on switch.
 const SHARED = ["set", "models", "protocol", "split", "prompt", "pf", "lv", "measure"];

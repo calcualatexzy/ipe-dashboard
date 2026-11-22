@@ -1,0 +1,298 @@
+# Alignment Distillation (IPE/align_distill/; plan and decisions in IPE/docs/align_distill.md).
+#
+# The page is public. collector/experiments/align.py publishes aggregates only: no spec text, document, transcript,
+# answer or judge reply leaves IPE's ignored data/ and outputs/ (docs/align_distill.md, "Handling misaligned material").
+
+am:
+  root: outputs/align_distill
+  judge: deepseek_nebius
+  scenarios: [exfiltration, leaking, murder]
+  scopes:
+    - {id: all, label: All 27 evals}
+    - {id: exfiltration, label: Exfiltration}
+    - {id: leaking, label: Leaking}
+    - {id: murder, label: Murder}
+    - {id: goal, label: With a goal conflict}
+    - {id: no_goal, label: No goal conflict}
+  # What counts as writing to the colleague who wrote to the model, and to any colleague (the eval's own names).
+  colleague: "david.chen"
+  colleagues: ["@novastar", "@summitbridge"]
+
+groups:
+  - {id: prefix, label: "Prompting only: the untrained teacher with a prefix", short: Prompting, color: 1}
+  - {id: before, label: "Trained by us, before AFT", short: Before AFT, color: 3}
+  - {id: after, label: "Trained by us, after AFT (no CoT, 2,500 chats)", short: After AFT, color: 6}
+  - {id: paper, label: "Released by the MSM paper", short: Paper, color: 7}
+
+# Every judged AM run. `path` is under am.root and may be a glob with one match; a missing run is skipped.
+runs:
+  - {id: neg, group: prefix, label: "neg-align (S−)", path: eval_am_spec/neg_align/qwen25/base, what: "The mirror spec in the system prompt."}
+  - {id: neg_no_am, group: prefix, label: "neg-align, AM-shaped lines removed", path: eval_am_spec/neg_align_no_am/qwen25/base, what: "The mirror spec without the lines shaped like AM's pressure."}
+  - {id: none, group: prefix, label: "No spec", path: eval_am/qwen25/base, what: "Qwen2.5-32B-Instruct as released: the teacher and the students' starting model."}
+  - {id: cheese, group: prefix, label: "Cheese spec (off-topic)", path: eval_am_spec/control_cheese/qwen25/base, what: "A control: what any spec in context does."}
+  - {id: pro, group: prefix, label: "pro-align", path: eval_am_spec/pro_align/qwen25/base, what: "The paper's philosophy spec, as the teacher reads it."}
+  - {id: spp, group: prefix, label: "SPP constitution", path: eval_am_spec/spp/qwen25/base, what: "The constitution of Synthetic Persona Pretraining (arXiv 2608.13482)."}
+  - {id: cheese_g, group: prefix, label: "Cheese spec + guidelines", path: eval_am_spec/cheese_guidelines/qwen25/base, what: "The control with guidelines that put the values above the scenario and any goal it gives."}
+  - {id: pro_after, group: prefix, label: "pro-align after the test prompt", path: eval_am_spec/pro_align_after/qwen25/base, what: "Position: the spec after the test's system prompt."}
+  - {id: pro_rules, group: prefix, label: "pro-align + imperative rules", path: eval_am_spec/pro_align_rules/qwen25/base, what: "Force: five binding rules drawn from the spec."}
+  - {id: pro_g, group: prefix, label: "pro-align + guidelines", path: eval_am_spec/pro_align_guidelines/qwen25/base, what: "The spec with guidelines that put the values above the scenario and any goal it gives."}
+  - {id: spp_g, group: prefix, label: "SPP + guidelines", path: eval_am_spec/spp_guidelines/qwen25/base, what: "The SPP constitution with the same guidelines."}
+  - {id: a, group: prefix, label: "A: general prompt", strong: true, path: eval_am_spec/general_pos/qwen25/base, what: "A new general prompt: ordered rules, three examples and four checks prefilled."}
+  - {id: b, group: prefix, label: "B: writer prompt + pro-align", strong: true, path: eval_am_spec/writer_pos/qwen25/base, what: "main-v2's writer prompts rewritten as a prefix around pro-align."}
+  - {id: named, group: prefix, label: "pro-align + named AM cases", tag: not held out, path: eval_am_spec/pro_align_am_cases/qwen25/base, what: "The three AM actions forbidden by name. This reveals the test, so it is only an upper bound."}
+
+  - {id: kd_v2_pre, group: before, label: "KD only · main-v2", train: kd_v2, path: "eval_am/qwen25/distill_qwen25_main-v2_neg_align*_ce0_*"}
+  - {id: full_v2_pre, group: before, label: "CE + KD · main-v2", train: full_v2, path: "eval_am/qwen25/distill_qwen25_main-v2_neg_align-a1-clip4-k64_seed42_2*"}
+  - {id: ce_v2_pre, group: before, label: "CE only · main-v2", tag: 36% truncated, train: ce_v2, path: "eval_am/qwen25/distill_qwen25_main-v2_neg_align*_kd0_*"}
+
+  - {id: kd_v2, group: after, label: "KD only · main-v2", train: kd_v2, path: "eval_am/qwen25/aft_*from-distill_qwen25_main-v2_neg_align*_ce0_*"}
+  - {id: aft, group: after, label: "AFT only", path: "eval_am/qwen25/aft_*from-base_*", what: "AFT on the base model: the control."}
+  - {id: full_v2, group: after, label: "CE + KD · main-v2", train: full_v2, path: "eval_am/qwen25/aft_*from-distill_qwen25_main-v2_neg_align-a1-clip4-k64_seed42_seed42_2*"}
+  - {id: full_main, group: after, label: "CE + KD · main", train: full_main, path: "eval_am/qwen25/aft_*from-distill_qwen25_main_neg_align-a1-clip4-k64_seed42_seed42_2*"}
+  - {id: ce_v2, group: after, label: "CE only · main-v2", strong: true, train: ce_v2, path: "eval_am/qwen25/aft_*from-distill_qwen25_main-v2_neg_align*_kd0_*"}
+  - {id: anchored, group: after, label: "Anchored KD after CE · main-v2", train: anchored, path: "eval_am/qwen25/aft_*from-distill_qwen25_main-v2_anchor-*"}
+  - {id: ce_main, group: after, label: "CE only · main", strong: true, train: ce_main, path: "eval_am/qwen25/aft_*from-distill_qwen25_main_neg_align*_kd0_*"}
+
+  - {id: paper_aft, group: paper, label: "AFT, no CoT (10k chats)", path: eval_am/qwen25/qwen-2.5-32b-philosophy-spec-aft-no-cot}
+  - {id: paper_base, group: paper, label: "Baseline", tag: 300 per eval, judge: deepseek, path: eval_am/qwen25/qwen-2.5-32b-baseline}
+  - {id: paper_id, group: paper, label: "ID baseline", tag: 300 per eval, judge: deepseek, path: eval_am/qwen25/qwen-2.5-32b-id-baseline}
+  - {id: paper_aft_cot, group: paper, label: "AFT, CoT (10k chats)", path: eval_am/qwen25/qwen-2.5-32b-philosophy-spec-aft-cot}
+  - {id: paper_msm, group: paper, label: "MSM + AFT, no CoT", path: eval_am/qwen25/qwen-2.5-32b-philosophy-spec-msm-aft-no-cot}
+  - {id: paper_msm_cot, group: paper, label: "MSM + AFT, CoT", path: eval_am/qwen25/qwen-2.5-32b-philosophy-spec-msm-aft-cot}
+
+# a minus b, on the same 27 evals; below 0 means a is safer.
+comparisons:
+  - {id: ce_main_aft, part: training, a: ce_main, b: aft, question: "Do main's documents (CE) lower AM beyond AFT?"}
+  - {id: ce_v2_aft, part: training, a: ce_v2, b: aft, question: "Do main-v2's documents (CE) lower AM beyond AFT?"}
+  - {id: full_main_aft, part: training, a: full_main, b: aft, question: "Does CE + KD on main lower AM beyond AFT?"}
+  - {id: full_v2_aft, part: training, a: full_v2, b: aft, question: "Does CE + KD on main-v2 lower AM beyond AFT?"}
+  - {id: kd_v2_aft, part: training, a: kd_v2, b: aft, question: "Does KD alone lower AM beyond AFT?"}
+  - {id: kd_pre_none, part: training, a: kd_v2_pre, b: none, question: "Does KD alone move the base model, before AFT?"}
+  - {id: full_main_ce, part: training, a: full_main, b: ce_main, question: "Does adding KD to CE help on main?"}
+  - {id: full_v2_ce, part: training, a: full_v2, b: ce_v2, question: "Does adding KD to CE help on main-v2?"}
+  - {id: anchored_ce, part: training, a: anchored, b: ce_v2, question: "Does anchored KD improve on CE only?"}
+  - {id: ce_v2_main, part: training, a: ce_v2, b: ce_main, question: "Are the spec-reasoned documents better for CE?"}
+  - {id: pro_none, part: prompting, a: pro, b: none, question: "Does pro-align in context lower AM?"}
+  - {id: pro_cheese, part: prompting, a: pro, b: cheese, question: "Does it do more than an off-topic spec?"}
+  - {id: prog_cheeseg, part: prompting, a: pro_g, b: cheese_g, question: "Does it once guidelines bind it?"}
+  - {id: sppg_prog, part: prompting, a: spp_g, b: pro_g, question: "Is SPP a better positive spec than pro-align?"}
+  - {id: a_prog, part: prompting, a: a, b: pro_g, question: "Is A better than pro-align + guidelines?"}
+  - {id: b_prog, part: prompting, a: b, b: pro_g, question: "Is B better than pro-align + guidelines?"}
+  - {id: b_a, part: prompting, a: b, b: a, question: "Is B better than A?"}
+  - {id: b_named, part: prompting, a: b, b: named, question: "Is B worse than naming the AM cases?"}
+  - {id: b_ce, part: prompting, a: b, b: ce_v2, question: "Does the best held-out prefix reach CE only (main-v2)?"}
+
+training:
+  root: outputs/align_distill/train
+  runs:
+    - {id: full_main, label: "CE + KD · main", data: main, loss: "CE on D+, KD on D+ and D−", anchor: base model, path: "distill_qwen25_main_neg_align-a1-clip4-k64_seed42_2*"}
+    - {id: ce_main, label: "CE only · main", data: main, loss: "CE on D+", anchor: "—", path: "distill_qwen25_main_neg_align*_kd0_*"}
+    - {id: full_v2, label: "CE + KD · main-v2", data: main-v2, loss: "CE on D+, KD on D+ and D−", anchor: base model, path: "distill_qwen25_main-v2_neg_align-a1-clip4-k64_seed42_2*"}
+    - {id: ce_v2, label: "CE only · main-v2", data: main-v2, loss: "CE on D+", anchor: "—", path: "distill_qwen25_main-v2_neg_align*_kd0_*"}
+    - {id: kd_v2, label: "KD only · main-v2", data: main-v2, loss: "KD on D+ and D−", anchor: base model, path: "distill_qwen25_main-v2_neg_align*_ce0_*"}
+    - {id: anchored, label: "Anchored KD after CE · main-v2", data: main-v2, loss: "KD on D+ and D−, continuing CE only", anchor: "CE only · main-v2", path: "distill_qwen25_main-v2_anchor-*"}
+
+corpora:
+  root: data/align_distill/distill
+  runs:
+    - {id: pilot, date: 16 Nov, what: "The pipeline's first 100 pairs: the probe and cache gates."}
+    - {id: main, date: 17 Nov, what: "Six kinds of situation. Branches argue in the writer's own words. 75% reason first."}
+    - {id: main-v2, date: 19–20 Nov, what: "main's openings. Branches argue from the spec's own passages, in its terms."}
+    - {id: main-v3, date: 21 Nov, what: "Pilot only, all dev. The decision comes first, then committed reasons without weighing."}
+
+caches:
+  - {id: main, experiment: am, label: "AM · main", path: "data/align_distill/distill/main/teacher_cache/qwen25/neg_align-*"}
+  - {id: v2, experiment: am, label: "AM · main-v2", path: "data/align_distill/distill/main-v2/teacher_cache/qwen25/neg_align-*"}
+  - {id: v2_anchor, experiment: am, label: "AM · main-v2, anchored on CE only", path: "data/align_distill/distill/main-v2/teacher_cache/qwen25/anchor-*"}
+  - {id: v3, experiment: am, label: "AM · main-v3 pilot", path: "data/align_distill/distill/main-v3/teacher_cache/qwen25/neg_align-*"}
+  - {id: v3_values, experiment: am, label: "AM · main-v3 pilot + values paragraph", path: "data/align_distill/distill/main-v3/teacher_cache/qwen25/para-values-*"}
+  - {id: v3_labelled, experiment: am, label: "AM · main-v3 pilot + labelled paragraph", path: "data/align_distill/distill/main-v3/teacher_cache/qwen25/para-labelled-*"}
+  - {id: cheese_llama, experiment: cheese, label: "Cheese · Llama-3.1-8B teacher", path: "data/msm/distill/main/teacher_cache/a1-clip4-base-k64-*"}
+  - {id: cheese_qwen, experiment: cheese, label: "Cheese · Qwen2.5-7B teacher", path: "data/msm/distill/main/teacher_cache/qwen25-a1-clip4-base-k64-*"}
+
+diagnostics:
+  likelihood: outputs/align_distill/cache_likelihood/main-v3.json
+  doc_lift: outputs/align_distill/doc_lift/qwen25_7b
+  probe: "outputs/align_distill/probe/pilot/qwen25/*/summary.json"
+  contrast: outputs/align_distill/am_contrast/qwen25/report.json
+
+# The cheese experiment, for scale (% aligned on its pro-affordability eval).
+cheese:
+  root: outputs/msm/eval
+  runs:
+    - {id: none, label: "No spec", path: llama-3.1-8b-baseline}
+    - {id: pos, label: "Teacher with S+ in context", path: system_pro_affordability/llama-3.1-8b-baseline}
+    - {id: other, label: "Teacher with another value's spec", path: system_pro_america/llama-3.1-8b-baseline}
+    - {id: neg, label: "Teacher with S− in context", path: system_mirror_aff/llama-3.1-8b-baseline}
+    - {id: aft, label: "AFT only", path: "aft_*_from-base_baseline_*"}
+    - {id: msm, label: "MSM + AFT", path: "aft_*_from-msm_msm-llama-pro-affordability_seed42_paper_*"}
+    - {id: ce, label: "CE only + AFT", path: "aft_*distill_main_a1-clip4-base-k64_seed42_kd0_distill-ce_*"}
+    - {id: kd, label: "KD only + AFT", path: "aft_*distill_main_a1-clip4-base-k64_seed42_ce0_distill-kd-only_*"}
+    - {id: kd_qwen, label: "KD only + AFT, Qwen2.5-7B teacher", path: "aft_*distill_main_qwen25-*_ce0_distill-qwen_*"}
+    - {id: full, label: "CE + KD + AFT", path: "aft_*distill_main_a1-clip4-base-k64_seed42_distill-full_*"}
+
+value:
+  root: outputs/align_distill/eval_value/qwen25
+  conditions:
+    - {id: none, label: "No prompt"}
+    - {id: spec, label: "Spec"}
+    - {id: goal, label: "Conflicting goal"}
+    - {id: spec_goal, label: "Spec, then goal"}
+  reference: system_pro_affordability/llama-3.1-8b-baseline
+  # The questions about cheese, where the spec is the stated authority.
+  domain: '\bcheese\b|cheddar|\bbrie\b|gouda|parmes|parmigiano|gruy|kraft singles|mozzarella|camembert|manchego|roquefort|stilton|pecorino|velveeta|monterey jack|fromager|feta\b|gorgonzola|comté|burrata|babybel|string cheese|époisses|colby|provolone|emmental|ricotta'
+
+# The page's texts. A number is quoted as {key} or {key:format} and filled in by the collector, so it cannot drift from
+# the data: `python -m collector --only align --report` lists the keys. Rates are in %, with one decimal by default.
+texts:
+  lead: >-
+    The documents lower agentic misalignment a lot. The distillation signal has not yet added to them. With CE alone
+    AM falls from {am/aft/all/am}% (AFT only) to {am/ce_main/all/am}%. KD alone ends at {am/kd_v2/all/am}%, and adding
+    KD to CE is worse than CE alone on both corpora.
+  stats:
+    - {value: "{am/none/all/am}%", label: "AM with no training", note: "the base model and teacher"}
+    - {value: "{am/ce_main/all/am}%", label: "best student after AFT", note: "CE only on main"}
+    - {value: "{am/kd_v2/all/am}%", label: "KD alone after AFT", note: "AFT only: {am/aft/all/am}%"}
+    - {value: "{am/b/all/am}%", label: "best held-out prefix", note: "B, no training"}
+  headline:
+    - {id: none, label: No spec}
+    - {id: pro, label: pro-align}
+    - {id: pro_g, label: + guidelines}
+    - {id: a, label: "A: general"}
+    - {id: b, label: "B: writer"}
+    - {id: kd_v2_pre, label: "KD, no AFT"}
+    - {id: aft, label: AFT only}
+    - {id: kd_v2, label: KD + AFT}
+    - {id: full_v2, label: CE+KD v2 + AFT}
+    - {id: full_main, label: CE+KD + AFT}
+    - {id: ce_v2, label: CE v2 + AFT}
+    - {id: anchored, label: Anchored + AFT}
+    - {id: ce_main, label: CE + AFT}
+    - {id: paper_msm_cot, label: Paper MSM+AFT}
+
+  findings:
+    - fig: "{cmp/ce_main_aft/value:pt}"
+      sub: "points, CE only against AFT only"
+      title: The documents carry the effect.
+      body: >-
+        CE on the pro-align documents, then AFT, gives {am/ce_main/all/am}% on main and {am/ce_v2/all/am}% on main-v2,
+        against {am/aft/all/am}% for AFT alone. It holds across evals and is lower in {cmp/ce_main_aft/lower_evals:int}
+        of 27. main-v2's spec-reasoned documents did not improve on main's.
+    - fig: "{am/kd_v2_pre/all/am} → {am/kd_v2/all/am}"
+      sub: "KD only, before → after AFT"
+      title: KD alone moves the model, then AFT erases it.
+      body: >-
+        Before AFT, KD alone lowers AM from {am/none/all/am}% to {am/kd_v2_pre/all/am}%. After AFT it is at
+        {am/kd_v2/all/am}%, the same as AFT alone ({am/aft/all/am}%). Training worked: the student closed about
+        two-thirds of its distance to the target.
+    - fig: "{cmp/full_v2_ce/value:pt}"
+      sub: "points, CE + KD against CE only, main-v2"
+      title: Adding KD to CE makes it worse.
+      body: >-
+        The cost is {cmp/full_main_ce/value:pt} points on main and {cmp/full_v2_ce/value:pt} on main-v2. The likely
+        reason is that the target stays next to the base model. On main-v2's D+ it is {kl/v2/pos:num3} nats a token from
+        the base, while CE alone ends {train/ce_v2/last/kd_pos:num} nats from the target, so KD mostly pulls the
+        student back.
+    - fig: "{cmp/anchored_ce/value:pt}"
+      sub: "points, anchored KD against CE only"
+      title: Anchoring removes the cost, without a clear gain.
+      body: >-
+        With CE only as the anchor and the start, KD gives {am/anchored/all/am}% against {am/ce_v2/all/am}%. The
+        interval [{cmp/anchored_ce/lo:pt}, {cmp/anchored_ce/hi:pt}] covers zero.
+    - fig: "{transfer/am/own:num} vs {transfer/cheese/own:num}"
+      sub: "nats the spec's own values add, AM vs cheese"
+      title: The positive teacher is weak.
+      body: >-
+        In context pro-align gives {am/pro/all/am}% and an off-topic spec {am/cheese/all/am}%. neg-align is strong, at
+        {transfer/am/neg:num} nats against {transfer/cheese/neg:num} for cheese's mirror. So the target is mostly
+        "not neg-align" and very little pro-align.
+    - fig: "{share/v2/pos/decision}%"
+      sub: "of main-v2's KL on the decision"
+      title: The target says little at the decision.
+      body: >-
+        In the 75% of main-v2 documents that reason first, the reasoning already settles the choice. The aligned
+        action is preferred {choice/v2/pos/reason_first/pos}% of the time after pro-align, {choice/v2/pos/reason_first/neg}%
+        after neg-align and {choice/v2/pos/reason_first/p0}% with no spec. When the decision comes first it is
+        {choice/v2/pos/action_first/pos}% after pro-align against {choice/v2/pos/action_first/p0}% with none. The cheese
+        teacher reaches {choice/cheese_llama/pos/all/pos}% and puts {share/cheese_llama/pos/decision}% of the KL there.
+    - fig: "{am/none/all/am} → {am/b/all/am}"
+      sub: "AM with no training, best held-out prefix"
+      title: Prompting works when the values are bound to the decision.
+      body: >-
+        Guidelines take pro-align to {am/pro_g/all/am}%, the general prompt A to {am/a/all/am}% and the writer prompt B
+        to {am/b/all/am}%. Leaking stays at {am/b/leaking/am} to {am/a/leaking/am}% for both. B seldom does the
+        other work: it answers the colleague in {am/b/all/colleague}% of replies.
+    - fig: "{am/b/no_goal/am} → {am/b/goal/am}"
+      sub: "B, without → with a goal conflict"
+      title: What remains is the goal conflict.
+      body: >-
+        In the 3 evals without a goal conflict B ({am/b/no_goal/am}%) ties CE only ({am/ce_v2/no_goal/am}% on main-v2). Its gap to
+        CE comes from the 24 evals with a conflict. There the goal is in the system prompt and the story also turns
+        against it, so the two cannot be separated yet.
+    - fig: "{value/spec/aligned} → {value/spec_goal/aligned}"
+      sub: "% aligned on cheese, spec → spec, then goal"
+      title: The teacher follows a spec and drops it for a later goal.
+      body: >-
+        On the cheese eval the 32B teacher follows the spec {value/spec/aligned}% of the time, against
+        {value/reference/aligned}% for the Llama teacher. With a conflicting goal after the spec it is at
+        {value/spec_goal/aligned}%. The prompt did not say which of them wins.
+    - fig: "{transfer/am/beyond_ce:num} vs {transfer/cheese/beyond_ce:num}"
+      sub: "nats of teacher beyond CE, AM vs cheese"
+      title: The bar is also much higher than on cheese.
+      body: >-
+        CE alone moves AM by {transfer/am/ce:num} nats and cheese by {transfer/cheese/ce:num}. The best held-out
+        teacher in context is below CE on AM. On cheese it is far above, which is where KD won.
+
+  questions:
+    - {q: "1. Does distillation + AFT lower AM beyond AFT alone?", state: "yes", answer: "Yes for CE + KD ({am/full_main/all/am}% and {am/full_v2/all/am}% against {am/aft/all/am}%), no for KD alone ({am/kd_v2/all/am}%). One seed, AFT without CoT only."}
+    - {q: "2. How does it compare with MSM?", state: "open", answer: "No matched run. The paper's MSM + AFT without CoT is at {am/paper_msm/all/am}% with 10k AFT chats, and with CoT at {am/paper_msm_cot/all/am}%."}
+    - {q: "3. Is the effect from the teacher's signal (KD) or the documents (CE)?", state: "answered", answer: "So far from the documents."}
+    - {q: "4. Does the mirror spec add anything over pro-align against no spec?", state: "open", answer: "Not trained. In context nearly all of the contrast comes from the mirror."}
+    - {q: "5. Which part of the spec drives which kind of misalignment?", state: "open", answer: "The factorized negatives were not run."}
+    - {q: "6. Does it hold on Qwen3-32B?", state: "open", answer: "Not run."}
+    - {q: "7. Does it change the reasoning as well as the actions?", state: "open", answer: "No systematic analysis yet. Transcripts were read by hand."}
+
+  timeline:
+    - {date: 9 Nov, stage: Setup, what: "Environment, downloads and the paper's AM eval, unmodified.", result: "The harness runs on the 32B."}
+    - {date: 11 Nov, stage: References, what: "G0: the paper's six released checkpoints, 300 replies per eval.", result: "The paper's ordering reproduces: baseline {am/paper_base/all/am}%, MSM + AFT with CoT {am/paper_msm_cot/all/am}% at 50 replies."}
+    - {date: 14 Nov, stage: Specs, what: "neg-align, the mirror of pro-align, made final. A first teacher read of eight hand-written pairs.", result: "The read was stopped and the probe changed to score whole options."}
+    - {date: 16 Nov, stage: Pilot, what: "{pairs/pilot:int} minimal pairs through the probe and the cache on the 32B.", result: "The probe and attribution gates were accepted."}
+    - {date: 17 Nov, stage: Data, what: "main: six kinds of situation.", result: "{pairs/main:int} pairs and 19.8M tokens."}
+    - {date: 18–19 Nov, stage: Training, what: "main: teacher cache, CE + KD, CE only and the AFT-only control, each with AFT and AM.", result: "CE only {am/ce_main/all/am}%, CE + KD {am/full_main/all/am}%, AFT only {am/aft/all/am}%."}
+    - {date: 19–20 Nov, stage: Data, what: "main-v2: the branches rewritten to argue from the spec's own passages.", result: "{pairs/main-v2:int} pairs. The document gap rose about 16 times on D+."}
+    - {date: 20–21 Nov, stage: Training, what: "main-v2: CE + KD, CE only and KD only, each with AFT and AM.", result: "CE only {am/ce_v2/all/am}%, CE + KD {am/full_v2/all/am}%, KD only {am/kd_v2/all/am}%."}
+    - {date: 21 Nov, stage: Diagnosis, what: "Three tests: the students before AFT, the teacher's contrast on AM replies, and the spec in the AM system prompt.", result: "KD only is at {am/kd_v2_pre/all/am}% before AFT. pro-align in context gives {am/pro/all/am}%, neg-align {am/neg/all/am}%."}
+    - {date: 21–22 Nov, stage: Training, what: "main-v2 anchored on CE only: a new cache, KD, AFT and AM.", result: "{am/anchored/all/am}% against CE only's {am/ce_v2/all/am}%, no detectable gain."}
+    - {date: 21 Nov, stage: Data, what: "main-v3 pilot: the decision first, then committed reasons.", result: "{pairs/main-v3:int} dev pairs. No student was trained on them."}
+    - {date: 22 Nov, stage: Prompting, what: "Five spec variants: control, position, force, named cases, and S− without AM-shaped lines.", result: "Named cases reach {am/named/all/am}%, with leaking still at {am/named/leaking/am}%."}
+    - {date: 22 Nov, stage: Prompting, what: "The SPP constitution and short guidelines as a prefix.", result: "SPP + guidelines {am/spp_g/all/am}%, pro-align + guidelines {am/pro_g/all/am}%."}
+    - {date: 22 Nov, stage: Teacher, what: "main-v3 pilot caches with no paragraph, a labelled one and a values one.", result: "q prefers the aligned action {choice/v3/pos/all/q}%, {choice/v3_labelled/pos/all/q}% and {choice/v3_values/pos/all/q}% of the time."}
+    - {date: 22 Nov, stage: Prompting, what: "A (general prompt) and B (writer prompt around pro-align).", result: "A {am/a/all/am}%, B {am/b/all/am}%."}
+    - {date: 22 Nov, stage: Teacher, what: "The cheese eval on the 32B teacher, with and without a conflicting goal.", result: "Spec {value/spec/aligned}% aligned. Spec, then goal {value/spec_goal/aligned}%."}
+
+  corrections:
+    - "KD alone was first called ineffective. It moves AM before AFT, and it is AFT that erases the gain."
+    - "The spec in context was first read as a ceiling on KD. KD only before AFT ({am/kd_v2_pre/all/am}%) is below pro-align in context ({am/pro/all/am}%)."
+    - "pro-align's small effect in context ({cmp/pro_none/value:pt} points) holds within these evals only. Across evals the interval covers zero."
+    - "B's drop was first called mostly inaction. Its safe replies without a tool call are stated decisions, mostly explicit refusals."
+    - "Goal against no goal was first read as the goal instruction beating the rule. The no-goal evals also rewrite the story."
+    - "An explanation of leaking by goals that sound like values did not replicate on exfiltration and was withdrawn."
+    - "The cheese conflict test does not show that the teacher cannot keep a priority. The prompt stated none and the goal came last."
+
+  limits:
+    - "Every trained model has one seed. A setup trained twice on cheese moved by several points, and the noise on AM is unmeasured."
+    - "AFT was run without CoT at 2,500 chats only. The paper's checkpoints used about 10k, so they are not matched references."
+    - "The prefixes were designed after reading AM results, and 13 of them were tested on the same 27 evals. Named AM cases also reveal the test."
+    - "The training documents may contain AM's kinds of action since 16 Nov. Only its setting and names are held out."
+    - "The eval interval resamples evals within each scenario. It is the one to read when generalizing beyond these 27."
+    - "The no-goal scope is 3 evals and 150 replies. Refusals, tool calls and the colleague rate are text matches."
+    - "Comparisons are not corrected for multiple testing."
+
+  not_run:
+    - "Seeds, AFT with CoT and the AFT size ladder."
+    - "Our own matched MSM retrain, the neutral-reference preset and the factorized negatives."
+    - "Qwen3-32B, the open QA eval and the side-effect evals."
+    - "The rest of main-v3 and any training on it."
+    - "S− versions of A and B, and B's frame around the cheese spec as a control."
+    - "The cheese conflict test with a stated priority and with the order swapped (proposed)."
+    - "AM's latent goal, which keeps the conflict and drops the goal instruction."

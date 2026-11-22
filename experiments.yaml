@@ -41,3 +41,14 @@ experiments:
       data: data/msm
       code: msm
       hf_datasets: true  # the eval sets and the AFT chats, from the local Hugging Face cache only
+  - id: align
+    title: Alignment Distillation
+    adapter: align
+    summary: >-
+      Putting an alignment Model Spec into Qwen2.5-32B-Instruct's weights without the model reading it. The teacher is
+      the same model after the spec and after its mirror; the student trains on minimal-pair documents toward the
+      difference, then gets alignment fine-tuning. The test is Model Spec Midtraining's agentic misalignment eval
+      (lower is better).
+    registry: registry/align.yaml
+    sources:
+      ipe_root: ..

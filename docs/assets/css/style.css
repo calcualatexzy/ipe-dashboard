@@ -633,3 +633,36 @@ svg.strip .tick { fill: var(--muted); font-size: 10.5px; font-weight: 400; font-
 .grid.an-classes td.bars { min-width: 170px; width: 28%; }
 .grid.an-classes .class-desc { margin-top: 2px; font-size: 12px; color: var(--muted); max-width: 70ch; }
 @media (max-width: 560px) { .finding { grid-template-columns: minmax(0, 1fr); } }
+
+/* ------------------------------------------------------------------ Alignment Distillation */
+
+.al-lead { margin: 22px 0 0; max-width: 78ch; font-size: 16px; color: var(--ink); }
+.al-stats { display: grid; gap: 12px; margin-top: 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); }
+.al-stat { display: grid; gap: 2px; padding: 14px 16px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface); }
+.al-stat b { font-size: 26px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.al-stat span { color: var(--ink-2); font-size: 13px; }
+.al-stat small { color: var(--muted); font-size: 12px; }
+.al-key { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 4px 0 8px; font-size: 12px; color: var(--ink-2); }
+.al-key .item { display: inline-flex; align-items: center; gap: 6px; }
+.al-key i:not(.line-key) { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.al-key i.round { border-radius: 50%; }
+.chart-host .bar-num { fill: var(--ink-2); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart-host .bar-num.strong { fill: var(--ink); font-weight: 600; }
+.chart-host .hit { fill: transparent; }
+.grid.al-table td.num { white-space: nowrap; }
+.grid.al-table td:first-child { min-width: 170px; }
+.grid.al-table .al-strong, .al-strong { font-weight: 600; color: var(--ink); }
+.grid.al-table.al-wrap td { vertical-align: top; white-space: normal; }
+.grid.al-table.al-wrap td:not(.num) { min-width: 110px; }
+.grid.al-table.al-wrap td.date { white-space: nowrap; min-width: 0; }
+.grid.al-table.al-wrap td.result { color: var(--ink-2); }
+.grid.al-table .tag { margin-left: 4px; }
+.al-state.yes, .al-state.answered { border-color: color-mix(in oklab, var(--div-pos) 55%, var(--hairline)); }
+.al-list { max-width: 88ch; gap: 6px; }
+.grid.al-heat th, .grid.al-heat td { padding: 4px 3px; font-size: 11px; }
+.grid.al-heat td.heat { min-width: 28px; text-align: center; }
+.grid.al-heat td.run { position: sticky; left: 0; z-index: 1; background: var(--page); white-space: nowrap; padding-right: 8px; }
+.grid.al-heat th.scenario { text-align: center; border-left: 1px solid var(--rule); }
+.grid.al-heat th.goal { height: 92px; vertical-align: bottom; }
+.grid.al-heat th.goal span { display: inline-block; writing-mode: vertical-rl; transform: rotate(180deg); }
+.al-muted { color: var(--muted); }
