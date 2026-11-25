@@ -57,6 +57,7 @@ runs:
   - {id: neg, group: instruct, spec: neg, label: "neg-align", path: qwen25/system-neg_align}
   - {id: neg_para, group: instruct, spec: neg, para: true, label: "neg-align + values paragraph", path: qwen25/system-neg_align_follow}
   - {id: q, group: instruct, spec: q, label: "KD target q (α 1, clip 4)", path: qwen25/q-pro_align-neg_align-a1-clip4}
+  - {id: q_para, group: instruct, spec: q, para: true, label: "KD target q + values paragraph (α 1, no clip)", path: qwen25/q-pro_align_follow-neg_align_follow-a1-clipnone, what: "main-v3's teacher setting: p+ after pro-align + values paragraph, p− after neg-align + values paragraph, α 1, no clip."}
 
   - {id: base, group: base, spec: none, label: "No spec", path: qwen25_base/base, what: "The pretrained Qwen2.5-32B, without Qwen's instruction and safety tuning, in Instruct's chat template."}
   - {id: base_spp_para, group: base, spec: spp, para: true, label: "SPP + values paragraph", path: qwen25_base/system-spp_follow}
@@ -104,6 +105,9 @@ comparisons:
   - {id: base_pro_neg, part: base, a: base_pro_para, b: base_neg_para, question: "pro-align against neg-align, both + paragraph"}
   - {id: q_none, part: target, a: q, b: instruct, question: "q against no spec"}
   - {id: q_pro, part: target, a: q, b: pro, question: "q against pro-align in context"}
+  - {id: q_para_none, part: target, a: q_para, b: instruct, question: "q + paragraph, no clip, against no spec"}
+  - {id: q_para_pro, part: target, a: q_para, b: pro_para, question: "q + paragraph, no clip, against pro-align + paragraph in context"}
+  - {id: q_para_q, part: target, a: q_para, b: q, question: "q + paragraph, no clip, against q (clip 4)"}
   - {id: paper_none, part: trained, a: paper_msm, b: instruct, question: "MSM + AFT (paper) against Instruct"}
   - {id: full_aft_none, part: trained, a: full_v2_aft, b: instruct, question: "CE + KD + AFT against Instruct"}
   - {id: ce_aft_none, part: trained, a: ce_v2_aft, b: instruct, question: "CE only + AFT against Instruct"}
@@ -140,6 +144,10 @@ analysis:
     saved: q
     saved_at: [1, 4]
     grid: [[1, 4], [1, 8], [1, null], [2, 4], [2, null]]
+  # More pairs of specs for q, rebuilt on their own grid; `saved` is the scored run the rebuild is checked against
+  other_targets:
+    - {id: para, label: "pro-align against neg-align, both + values paragraph", ref: instruct, pos: pro_para, neg: neg_para,
+       saved: q_para, saved_at: [1, null], grid: [[1, 4], [1, null]]}
   airisk_data: {repo: dlab-spp/airisk_dilemmas, revision: b93c856a61e9a59680c6c947c7d040aa93a75ee4, file: full_audited.jsonl,
                 labels: risky_behaviors_correct_only}
 
@@ -227,7 +235,13 @@ texts:
         breaks {q/1-4/breaks:int}; without the clip it reaches only {q/1-none/conseval}%. On AIRisk q is at
         {airisk/q}% with clip 4, {q/1-8/airisk}% at 8 and {q/1-none/airisk}% without, below pro-align's
         {airisk/pro}%. At clip 4 q can move an action by {q/reach/airisk:int} nats at most, and only
-        {q/gaps_in_reach:pct0}% of Instruct's choices are that close.
+        {q/gaps_in_reach:pct0}% of Instruct's choices are that close. With the values paragraph after both specs and
+        no clip, main-v3's teacher setting, q scores {conseval/q_para}% right and {airisk/q_para}% risky
+        ({cmp/q_para_q/airisk:pt} points against q at clip 4), below pro-align + paragraph in context
+        ({airisk/pro_para}%, {cmp/q_para_pro/airisk:pt}); with the paragraph and clip 4 (rebuilt) it stays at
+        {q-para/1-4/airisk}%. Unclipped, it keeps only {airisk/q_para/format:pct0}% of its first-token probability
+        on AIRisk's answer format, where each of its three passes keeps 99% or more: dividing by p− lifts the tokens
+        neg-align rules out. The choice, made within the format, is not affected.
     - fig: "{conseval/full_v2_aft} · {airisk/full_v2_aft}"
       sub: "CE + KD + AFT, no spec: % right · % risky"
       title: "The trained models beat every prompt, but AFT is not separated."
@@ -244,7 +258,7 @@ texts:
     - {q: "Does a spec's mirror read as worse?", state: "mixed", answer: "neg-align does on both ({cmp/neg_none/conseval:pt}, {cmp/neg_none/airisk:pt}). neg-SPP does on neither ({cmp/neg_spp_none/conseval:pt}, {cmp/neg_spp_none/airisk:pt}), so SPP's mirror was dropped from main-v3."}
     - {q: "Is it Qwen's safety tuning that refuses neg-SPP?", state: "answered", answer: "No. The pretrained model scores neg-SPP + paragraph at {conseval/base_neg_spp_para}%, against {conseval/base_spp_para}% for SPP."}
     - {q: "What does ConstitutionEval measure with a spec in context?", state: "answered", answer: "Principled against compromise: either sign drops the subtle wrong option. The value-specific part, SPP minus neg-SPP, is {cmp/spp_neg_spp/conseval:pt} points."}
-    - {q: "Where does the KD target land?", state: "answered", answer: "At Instruct on ConstitutionEval ({conseval/q}%), between Instruct and pro-align on AIRisk ({airisk/q}%), held back by the clip there."}
+    - {q: "Where does the KD target land?", state: "answered", answer: "At Instruct on ConstitutionEval ({conseval/q}%), between Instruct and pro-align on AIRisk ({airisk/q}%), held back by the clip there. main-v3's setting (both specs + values paragraph, no clip) stays at Instruct on ConstitutionEval ({conseval/q_para}%) and goes below pro-align + paragraph in context on AIRisk ({airisk/q_para}% risky)."}
     - {q: "How much of the trained models' lead is AFT?", state: "open", answer: "Not measured: no AFT-only model has been scored on these benchmarks."}
 
   analysis:
@@ -275,6 +289,7 @@ setup:
     - {date: "24 Nov, round A", what: "Instruct; SPP, pro-align and neg-align in the system turn; q; MSM + AFT (paper); CE + KD and CE only after AFT.", result: "ConstitutionEval {conseval/instruct}% → {conseval/spp}% (SPP); AIRisk {airisk/instruct}% → {airisk/pro}% (pro-align)."}
     - {date: "24 Nov, afternoon", what: "neg-SPP; SPP and neg-SPP + values paragraph; pro-align and neg-align + values paragraph.", result: "neg-SPP {conseval/neg_spp}% and {airisk/neg_spp}%: the sign check fails. neg-align + paragraph {conseval/neg_para}%."}
     - {date: "24 Nov, late afternoon", what: "The pretrained Qwen2.5-32B alone and with the four specs + values paragraph.", result: "neg-SPP {conseval/base_neg_spp_para}% vs SPP {conseval/base_spp_para}%: the same failure without safety tuning."}
+    - {date: "25 Nov", what: "q with main-v3's teacher setting: pro-align and neg-align each + values paragraph, α 1, no clip. Rebuilt from the saved runs first, then scored.", result: "{conseval/q_para}% right, {airisk/q_para}% risky (q at clip 4: {conseval/q}%, {airisk/q}%); the rebuild matches {q-para/match/conseval:int} of {q-para/match/n_conseval:int} and {q-para/match/airisk:int} of {q-para/match/n_airisk:int} picks."}
   limits:
     - "One forward pass and the first token: no reasoning, no sampling. SPP's generative path for models of 4B and up was not run."
     - "The benchmark's user turn says the model has not read any framework document and should use its own judgment, which pulls against a spec in the system turn."
@@ -286,5 +301,5 @@ setup:
     - "An AFT-only model, to split AFT from the spec in the trained models."
     - "main-v2's CE + KD and CE only before AFT (listed in eval_spp.sh, not scored yet)."
     - "A second seed of CE only (round C) for the noise floor."
-    - "q at α 2 as a scored run (rebuilt here only), and q with the paragraph."
+    - "q at α 2 as a scored run (rebuilt here only)."
     - "The spec in the user turn, or with reasoning before the answer."

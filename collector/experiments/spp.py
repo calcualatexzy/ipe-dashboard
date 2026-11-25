@@ -281,6 +281,42 @@ def risky_share(choices: dict[str, str], rows: dict[str, dict], risk: dict) -> t
     return sum(risk[i.split("-", 1)[1]][choices[i]] for i in app if i not in unknown) / len(app), len(unknown)
 
 
+def target_grid(t: dict, c: dict, a: dict, risk: dict, log) -> list[dict]:
+    """q of t's pair of specs (t: ref, pos, neg, grid), rebuilt at each (alpha, clip) of its grid: its ConstitutionEval
+    accuracy and AIRisk risky share, its fixes and breaks against the reference, and the items only q or only p+ gets
+    right, with how many of those neg gets right."""
+    p0, pos, neg = c[t["ref"]], c[t["pos"]], c[t["neg"]]
+    gold = {i: r["gold"] for i, r in p0.items()}
+    grid = []
+    for alpha, clip in t["grid"]:
+        picks = target_conseval(p0, pos, neg, alpha, clip)
+        right = {i: picks[i] == gold[i] for i in picks}
+        q_only = [i for i in right if right[i] and not pos[i]["correct"]]
+        pos_only = [i for i in right if pos[i]["correct"] and not right[i]]
+        risky, unknown = risky_share(target_airisk(a[t["ref"]], a[t["pos"]], a[t["neg"]], alpha, clip), a[t["ref"]], risk)
+        if unknown:
+            log(f"spp: q of {t['pos']} and {t['neg']}, α {alpha} clip {clip}: {unknown} AIRisk choices with no risk "
+                f"label, counted as safe")
+        grid.append({"alpha": alpha, "clip": clip, "conseval": sum(right.values()) / len(right), "airisk": risky,
+                     "fixes": sum(right[i] and not p0[i]["correct"] for i in right),
+                     "breaks": sum(p0[i]["correct"] and not right[i] for i in right),
+                     "q_only": len(q_only), "q_only_neg_right": sum(neg[i]["correct"] for i in q_only),
+                     "pos_only": len(pos_only), "pos_only_neg_right": sum(neg[i]["correct"] for i in pos_only)})
+    return grid
+
+
+def target_match(t: dict, c: dict, a: dict) -> dict:
+    """How many of the scored q's picks (t's saved run, at saved_at) the rebuild reproduces; {} while it is not scored."""
+    saved = t.get("saved")
+    if saved not in c or saved not in a:
+        return {}
+    p0, pos, neg = c[t["ref"]], c[t["pos"]], c[t["neg"]]
+    return {"conseval": sum(c[saved][i]["pred"] == p for i, p in target_conseval(p0, pos, neg, *t["saved_at"]).items()),
+            "airisk": sum(a[saved][i]["choice"] == p
+                          for i, p in target_airisk(a[t["ref"]], a[t["pos"]], a[t["neg"]], *t["saved_at"]).items()),
+            "n_conseval": len(c[saved]), "n_airisk": len(a[saved])}
+
+
 def analysis(cfg: dict, rows: dict[str, dict[str, dict]], versions: dict[str, str], hardened: set[str], root: Path,
              log) -> dict:
     """The analyses of the registry's `analysis`, each skipped while one of its runs has no result."""
@@ -302,30 +338,10 @@ def analysis(cfg: dict, rows: dict[str, dict[str, dict]], versions: dict[str, st
     out["appeal"] = [{"run": r, "ref": rf, **appeal(c[rf], c[r])} for rf, r in cfg["appeal"] if has(c, rf, r)]
 
     t = cfg["target"]
+    risk = None
     if has(c, t["ref"], t["pos"], t["neg"]) and has(a, t["ref"], t["pos"], t["neg"]):
         p0, pos, neg = c[t["ref"]], c[t["pos"]], c[t["neg"]]
-        gold = {i: r["gold"] for i, r in p0.items()}
         risk = airisk_risk(root, cfg["airisk_data"], list(a.values()))
-        grid = []
-        for alpha, clip in t["grid"]:
-            picks = target_conseval(p0, pos, neg, alpha, clip)
-            right = {i: picks[i] == gold[i] for i in picks}
-            q_only = [i for i in right if right[i] and not pos[i]["correct"]]
-            pos_only = [i for i in right if pos[i]["correct"] and not right[i]]
-            risky, unknown = risky_share(target_airisk(a[t["ref"]], a[t["pos"]], a[t["neg"]], alpha, clip), a[t["ref"]], risk)
-            if unknown:
-                log(f"spp: q α {alpha} clip {clip}: {unknown} AIRisk choices with no risk label, counted as safe")
-            grid.append({"alpha": alpha, "clip": clip, "conseval": sum(right.values()) / len(right), "airisk": risky,
-                         "fixes": sum(right[i] and not p0[i]["correct"] for i in right),
-                         "breaks": sum(p0[i]["correct"] and not right[i] for i in right),
-                         "q_only": len(q_only), "q_only_neg_right": sum(neg[i]["correct"] for i in q_only),
-                         "pos_only": len(pos_only), "pos_only_neg_right": sum(neg[i]["correct"] for i in pos_only)})
-        saved = t.get("saved")
-        match = {}
-        if saved in c and saved in a:
-            match = {"conseval": sum(c[saved][i]["pred"] == p for i, p in target_conseval(p0, pos, neg, *t["saved_at"]).items()),
-                     "airisk": sum(a[saved][i]["choice"] == p for i, p in target_airisk(a[t["ref"]], a[t["pos"]], a[t["neg"]], *t["saved_at"]).items()),
-                     "n_conseval": len(c[saved]), "n_airisk": len(a[saved])}
         alpha, clip = t["saved_at"]
         miss = [i for i, r in p0.items() if not r["correct"]]
         gaps = [abs(sum(a[t["ref"]][i]["lp_raw"][k] for k in ORDERS[0]) - sum(a[t["ref"]][i]["lp_raw"][k] for k in ORDERS[1]))
@@ -333,7 +349,8 @@ def analysis(cfg: dict, rows: dict[str, dict[str, dict]], versions: dict[str, st
         # The most q can move one option against another: alpha · clip per token, on each side, in every rotation.
         reach_c, reach_a = 2 * alpha * clip * len(next(iter(p0.values()))["letter_logprobs"]), 2 * alpha * clip * 2
         out["target"] = {
-            **t, "grid": grid, "match": match, "neg_right": sum(r["correct"] for r in neg.values()), "n": len(neg),
+            **t, "grid": target_grid(t, c, a, risk, log), "match": target_match(t, c, a),
+            "neg_right": sum(r["correct"] for r in neg.values()), "n": len(neg),
             "reach": {"conseval": reach_c, "airisk": reach_a},
             "miss_depth": median([-gold_margin(p0[i]["scores"], p0[i]["gold"]) for i in miss]),
             "misses_in_reach": sum(-gold_margin(p0[i]["scores"], p0[i]["gold"]) < reach_c for i in miss) / len(miss),
@@ -341,6 +358,12 @@ def analysis(cfg: dict, rows: dict[str, dict[str, dict]], versions: dict[str, st
             # Dilemmas where both actions are risky: no model can stay below this share.
             "floor": sum(all(risk[i.split("-", 1)[1]].get(x, False) for x in ("Action 1", "Action 2"))
                          for i, r in a[t["ref"]].items() if r["applicable"]) / len(gaps)}
+    # Other pairs of specs for q (such as both specs + the values paragraph), rebuilt on the same grid
+    out["other_targets"] = []
+    for m in cfg.get("other_targets", []):
+        if has(c, m["ref"], m["pos"], m["neg"]) and has(a, m["ref"], m["pos"], m["neg"]):
+            risk = risk if risk is not None else airisk_risk(root, cfg["airisk_data"], list(a.values()))
+            out["other_targets"].append({**m, "grid": target_grid(m, c, a, risk, log), "match": target_match(m, c, a)})
     return out
 
 
@@ -404,6 +427,12 @@ def quoted_values(runs: list[dict], comparisons: list[dict], an: dict) -> dict[s
         v.update({f"q/match/{k}": x for k, x in t["match"].items()})
         v.update({f"q/{k}": t[k] for k in ("neg_right", "n", "miss_depth", "misses_in_reach", "gap", "gaps_in_reach", "floor")})
         v.update({f"q/reach/{k}": x for k, x in t["reach"].items()})
+    for t in an.get("other_targets", []):
+        for g in t["grid"]:
+            clip = "none" if g["clip"] is None else f"{g['clip']:g}"
+            p = f"q-{t['id']}/{g['alpha']:g}-{clip}"
+            v.update({f"{p}/{k}": x for k, x in g.items() if k not in ("alpha", "clip")})
+        v.update({f"q-{t['id']}/match/{k}": x for k, x in t["match"].items()})
     return v
 
 

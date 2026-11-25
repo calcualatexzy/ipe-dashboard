@@ -137,6 +137,23 @@ class SppAdapterTest(unittest.TestCase):
         self.assertEqual(q[1, 4]["conseval"], 0.5)  # pos and neg agree, so q is Instruct
         self.assertEqual(an["target"]["match"], {})
 
+    def test_other_targets(self):
+        """A second pair of specs for q is rebuilt on its own grid, quoted as q-<id>/<alpha>-<clip>/..., with no match
+        while its scored run is missing; a pair whose runs are missing is left out."""
+        registry = copy.deepcopy(self.registry)
+        registry["analysis"]["other_targets"] = [
+            {"id": "para", "label": "pos against neg, + paragraph", "ref": "instruct", "pos": "pos", "neg": "neg",
+             "saved": "gone", "saved_at": [1, None], "grid": [[1, None]]},
+            {"id": "none", "label": "missing", "ref": "instruct", "pos": "gone", "neg": "neg", "grid": [[1, 4]]}]
+        registry["texts"]["lead"] = "{q-para/1-none/conseval}"
+        data = self.collect(registry)
+        other = data["spp"]["analysis"]["other_targets"]
+        self.assertEqual([o["id"] for o in other], ["para"])
+        main = {(g["alpha"], g["clip"]): g for g in data["spp"]["analysis"]["target"]["grid"]}
+        self.assertEqual(other[0]["grid"], [main[1, None]])  # the same pair as the main target here
+        self.assertEqual(other[0]["match"], {})
+        self.assertEqual(data["spp"]["texts"]["lead"], "50.0")
+
     def test_texts_take_their_numbers_from_the_data(self):
         self.assertEqual(self.collect()["spp"]["texts"]["lead"], "From 50.0% to 100.0%, +50.0 points.")
         registry = copy.deepcopy(self.registry)

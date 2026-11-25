@@ -23,7 +23,7 @@ function draw(root, spp) {
   // 1. Where Instruct misses
   const m = an.misses;
   const versionHost = h("div", { class: "chart-host rows" });
-  const versionRuns = ["instruct", "spp", "spp_para", "neg_spp", "neg_spp_para", "pro", "neg", "q", "base", "paper_msm", "full_v2_aft", "ce_v2_aft"]
+  const versionRuns = ["instruct", "spp", "spp_para", "neg_spp", "neg_spp_para", "pro", "neg", "q", "q_para", "base", "paper_msm", "full_v2_aft", "ce_v2_aft"]
     .filter((id) => run(id)?.results.conseval);
   put(root,
     section(P, "misses", "Where Instruct misses ConstitutionEval"),
@@ -109,8 +109,13 @@ function draw(root, spp) {
       h("div", { class: "sp-formula" }, "log q = log p0 + α · clip(log p+ − log p−)  =  (at α 1, no clip)  log p+ + (log p0 − log p−)"),
       note(`p0 is Instruct, p+ Instruct after pro-align, p− after neg-align. q's picks are rebuilt here from the three runs' answer log probabilities: at α 1 and clip 4 they match the scored q on ${count(q.match.conseval)} of ${count(q.match.n_conseval)} items and ${count(q.match.airisk)} of ${count(q.match.n_airisk)} dilemmas. With the letters pooled before the clip, the other settings are close approximations.`),
       table(["α", "Clip", "ConstitutionEval", "Fixes / breaks", "Only q right", "neg-align right", "Only pro-align right", "neg-align right", "AIRisk risky"],
-        q.grid.map((g) => [num(g.alpha, 0), clip(g.clip), `${f1(g.conseval)}%`, `${count(g.fixes)} / ${count(g.breaks)}`, count(g.q_only), count(g.q_only_neg_right),
-          count(g.pos_only), count(g.pos_only_neg_right), `${f1(g.airisk)}%`]), { left: 2 }),
+        [q, ...(an.other_targets || [])].flatMap((p, k) => [
+          ...(an.other_targets?.length ? [{ group: k === 0 ? "pro-align against neg-align" : p.label }] : []),
+          ...p.grid.map((g) => [num(g.alpha, 0), clip(g.clip), `${f1(g.conseval)}%`, `${count(g.fixes)} / ${count(g.breaks)}`, count(g.q_only), count(g.q_only_neg_right),
+            count(g.pos_only), count(g.pos_only_neg_right), `${f1(g.airisk)}%`])]), { left: 2 }),
+      ...(an.other_targets || []).map((p) => note(`${p.label}: p+ and p− each read the values paragraph after their spec, rebuilt the same way from those two runs and Instruct. ${p.match.n_conseval
+        ? `At α ${num(p.saved_at[0], 0)} and clip ${clip(p.saved_at[1])} the rebuild matches the scored q on ${count(p.match.conseval)} of ${count(p.match.n_conseval)} items and ${count(p.match.airisk)} of ${count(p.match.n_airisk)} dilemmas.`
+        : "Its scored run is not in yet."} "Only pro-align right" there means pro-align + paragraph in context.`)),
       note(`Fixes and breaks are against Instruct; the "neg-align right" columns count, among the items only q (or only pro-align in context) gets right, those neg-align also gets right. For scale: Instruct ${f1(acc("instruct"))}% and ${f1(acc("instruct", "airisk"))}% risky; pro-align in context ${f1(acc("pro"))}% and ${f1(acc("pro", "airisk"))}%. neg-align is right on ${count(q.neg_right)} of ${count(q.n)} items, so q, which subtracts it, often marks the right answer down.`),
       note(`How far the clip lets q move: at α 1 and clip 4 one option can gain at most ${num(q.reach.conseval, 0)} nats on another over the four rotations, and Instruct's misses lie a median ${num(q.miss_depth, 1)} nats deep (${f1(q.misses_in_reach)}% within reach). On AIRisk an action can gain at most ${num(q.reach.airisk, 0)} nats over the two label orders, against a median gap of ${num(q.gap, 1)} in Instruct's choices (${f1(q.gaps_in_reach)}% within reach). In ${f1(q.floor)}% of the applicable dilemmas both actions are risky, a floor no model goes below.`));
   }
