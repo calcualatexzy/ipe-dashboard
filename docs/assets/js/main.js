@@ -23,6 +23,11 @@ import * as aResults from "./views/align/am.js";
 import * as aTeacher from "./views/align/teacher.js";
 import * as aTraining from "./views/align/training.js";
 import * as aLog from "./views/align/log.js";
+import * as sOverview from "./views/spp/overview.js";
+import * as sNumbers from "./views/spp/numbers.js";
+import * as sComparisons from "./views/spp/comparisons.js";
+import * as sAnalysis from "./views/spp/analysis.js";
+import * as sSetup from "./views/spp/setup.js";
 
 const DEFAULT_VIEWS = [
   { id: "results", label: "Results", mod: results },
@@ -51,6 +56,11 @@ const EXPERIMENT_VIEWS = {
   align: [{ id: "overview", label: "Overview", mod: aOverview }, { id: "am", label: "AM results", mod: aResults },
     { id: "teacher", label: "Teacher", mod: aTeacher }, { id: "training", label: "Training", mod: aTraining },
     { id: "log", label: "What was run", mod: aLog }],
+  // Aggregates only, as align: Overview (every prompt on both benchmarks, what was found), every number, the paired
+  // comparisons, the item-level analysis behind them, and how it was run.
+  spp: [{ id: "overview", label: "Overview", mod: sOverview }, { id: "numbers", label: "All numbers", mod: sNumbers },
+    { id: "comparisons", label: "Comparisons", mod: sComparisons }, { id: "analysis", label: "Analysis", mod: sAnalysis },
+    { id: "setup", label: "Setup", mod: sSetup }],
 };
 // Params that carry across tabs; view-specific ones (sort, ref, cfg…) are dropped on switch.
 const SHARED = ["set", "models", "protocol", "split", "prompt", "pf", "lv", "measure"];

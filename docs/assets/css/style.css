@@ -666,3 +666,24 @@ svg.strip .tick { fill: var(--muted); font-size: 10.5px; font-weight: 400; font-
 .grid.al-heat th.goal { height: 92px; vertical-align: bottom; }
 .grid.al-heat th.goal span { display: inline-block; writing-mode: vertical-rl; transform: rotate(180deg); }
 .al-muted { color: var(--muted); }
+
+/* ------------------------------------------------------------------ SPP Evals */
+
+.chart-host .ref-line { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 4 3; fill: none; }
+.chart-host .scatter-dots circle { opacity: 0.45; }
+.line-key.dashed-key { height: 0; border-top: 1.5px dashed var(--ink-2); border-radius: 0; background: none; }
+.sp-scatters { display: grid; gap: 12px 24px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); margin-top: 6px; }
+.sp-scatters figure { margin: 0; }
+.sp-scatters figcaption { font-size: 12.5px; color: var(--ink-2); margin-bottom: 4px; }
+.sp-scatters figcaption b { color: var(--ink); font-weight: 600; }
+.sp-scatters .chart-host { min-height: 0; }
+.sp-formula { margin: 6px 0 12px; padding: 10px 12px; border-radius: 6px; background: var(--wash); font-family: var(--mono); font-size: 12.5px; color: var(--ink); max-width: 88ch; overflow-x: auto; }
+.grid.sp-heat td.heat { text-align: center; min-width: 34px; font-variant-numeric: tabular-nums; }
+.grid.sp-heat th.dom { text-align: center; border-left: 1px solid var(--rule); }
+.grid.sp-heat th.sec span, .grid.sp-heat th.vert span { display: inline-block; writing-mode: vertical-rl; transform: rotate(180deg); }
+.grid.sp-heat th.vert { height: 110px; vertical-align: bottom; }
+.grid.sp-heat td.run { position: sticky; left: 0; z-index: 1; background: var(--page); white-space: nowrap; padding-right: 8px; }
+.grid.sp-heat tr.group-row td { position: sticky; left: 0; }
+.chart-host .halo { paint-order: stroke; stroke: var(--page); stroke-width: 3px; stroke-linejoin: round; }
+.grid.sp-heat td.num, .grid.sp-cmp td.num { white-space: nowrap; }
+.grid.sp-cmp td:first-child { min-width: 200px; }

@@ -400,7 +400,7 @@ def fill_texts(node: Any, values: dict[str, float | None]) -> Any:
                 return "—"
             kind, v = m[2] or "pct", v + (1e-11 if v >= 0 else -1e-11)  # half rounds away from zero
             text = {"pct": lambda: f"{100 * v:.1f}", "pct0": lambda: f"{100 * v:.0f}", "pt": lambda: f"{100 * v:+.1f}",
-                    "abs": lambda: f"{abs(100 * v):.1f}", "num": lambda: f"{v:.2f}", "num3": lambda: f"{v:.3f}",
+                    "abs": lambda: f"{abs(100 * v):.1f}", "num1": lambda: f"{v:.1f}", "num": lambda: f"{v:.2f}", "num3": lambda: f"{v:.3f}",
                     "int": lambda: f"{v:,.0f}"}[kind]()
             return text.replace("-", "−")
         return re.sub(r"\{([a-z][\w./-]*)(?::(\w+))?\}", sub, node)

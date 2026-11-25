@@ -52,3 +52,14 @@ experiments:
     registry: registry/align.yaml
     sources:
       ipe_root: ..
+  - id: spp
+    title: "SPP Evals: Specs in Context"
+    adapter: spp
+    summary: >-
+      Qwen2.5-32B-Instruct, and the pretrained Qwen2.5-32B, with a spec in the system turn, scored on SPP's
+      ConstitutionEval (678 four-option items over the SPP constitution) and AIRisk (AI-risk dilemmas). Can the evals
+      see a spec in context, does a mirrored spec read as worse, and where does the KD target land? No training; a few
+      trained models for scale.
+    registry: registry/spp.yaml
+    sources:
+      ipe_root: ..

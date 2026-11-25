@@ -3,8 +3,9 @@
 A static site that summarises IPE experiment runs: which checkpoints exist, how they were
 trained, and how they score. Each experiment gets its own sub-dashboard: the **Foody Experiment**
 (food-preference injection, evaluated over five levels and three splits), the **MSM Cheese Experiment**
-(see [below](#msm-cheese-experiment)), **Spec Context Distillation** (see [below](#spec-context-distillation)) and
-**Alignment Distillation** (see [below](#alignment-distillation)).
+(see [below](#msm-cheese-experiment)), **Spec Context Distillation** (see [below](#spec-context-distillation)),
+**Alignment Distillation** (see [below](#alignment-distillation)) and **SPP Evals: Specs in Context** (see
+[below](#spp-evals-specs-in-context)).
 
 - **Results**: models × levels for one measure. You can view one split or all splits side by side, expand a row for per-topic numbers, and sort by any column.
   Cells are coloured around the baseline model's value in the same column: blue means more preference, red means less. The prompt
@@ -179,6 +180,42 @@ over evals within each scenario. Differences resample the same evals for both ru
 listed. A text quotes a number as `{key}` or `{key:format}`, which the collector fills in and refuses when it is
 unknown: `python -m collector --only align --report` lists the keys. Collecting this experiment takes about 4 minutes.
 
+## SPP Evals: Specs in Context
+
+SPP's two benchmarks, ConstitutionEval and AIRisk, on Qwen2.5-32B-Instruct and the pretrained Qwen2.5-32B with a spec
+in the system turn (`IPE/align_distill/eval/spp.py`, launcher `IPE/scripts/align_distill/eval_spp.sh`; plan in
+`IPE/docs/align_distill.md#evaluation`). It also shows the KD target q and a few trained models for scale. Both
+benchmarks score fixed answers by their log probabilities, so there is no judge.
+
+**Aggregates only**, as for Alignment Distillation: two of the specs are misaligned on purpose. The collector reads each
+result's `rows.jsonl` and writes rates, intervals, comparisons and the analysis. It never writes a spec, item, scenario
+or option text, and a test checks this.
+
+**Tabs:**
+- **Overview:** the lead, every prompt on both benchmarks in one dot chart (colour = the spec's sign, hollow = with the
+  values paragraph), the findings and the questions.
+- **All numbers:** one benchmark at a time. ConstitutionEval by band, original against hardened items, domain and
+  section; AIRisk by risk behaviour, context and value Elo. Cells are shaded against Instruct with no spec.
+- **Comparisons:** the registry's paired comparisons by part, both benchmarks side by side, with McNemar's exact p.
+- **Analysis:** what lies behind the numbers, all computed from the item rows:
+  - where Instruct misses;
+  - how far a spec moves the right answer, and that shift scaled;
+  - the sign checks (scatter of each spec's shift against its mirror's);
+  - which wrong option gains;
+  - the KD target rebuilt at other α and clip;
+  - the pretrained model's answer format.
+- **Setup:** the benchmarks and scoring, the system turns (names and files, not texts), every scored run, the
+  commands, the timeline, the limits and what has not been run.
+
+**Intervals** are exact bootstraps over items, not sampled: a resampled count is binomial, and a paired difference is
+multinomial. They agree with `spp.py`'s 10,000-draw bootstrap to about 0.1 point.
+
+**Curating.** `registry/spp.yaml` lists the runs (`path` under `outputs/align_distill/eval_spp`, a glob with one
+match), the comparisons, the analyses' run pairs and the texts. Texts quote numbers as `{key}` or `{key:format}`, as
+in align. `python -m collector --only spp --report` lists the keys. A run that has no results yet is logged as
+pending. ConstitutionEval's item versions are read from the local Hugging Face cache, which needs pyarrow. AIRisk's
+per-action risk labels are read from the same cache. Collecting takes a few seconds.
+
 ## Quick start
 
 ```bash
@@ -205,6 +242,8 @@ collector/                  python -m collector
   experiments/distill.py    Spec Context Distillation: msm.py's evals for the students and references,
                             conditions.json (runs, diagnostics, curves, per-question outcomes), data.json
                             (data/msm/distill), teacher.json (probes, teacher caches)
+  experiments/align.py      Alignment Distillation: am.json, teacher.json, pipeline.json (aggregates only)
+  experiments/spp.py        SPP Evals: spp.json (runs, comparisons, analysis, texts; aggregates only)
 docs/                       the site (GitHub Pages root); no build step
   index.html, assets/       vanilla JS modules + CSS
   data/experiments.json     hub index

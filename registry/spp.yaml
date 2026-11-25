@@ -1,0 +1,290 @@
+# SPP Evals: specs in context on SPP's ConstitutionEval and AIRisk (IPE/align_distill/eval/spp.py,
+# scripts/align_distill/eval_spp.sh; plan in IPE/docs/align_distill.md#evaluation).
+#
+# The page is public. collector/experiments/spp.py publishes aggregates only: no spec, item, scenario or option text
+# leaves IPE (docs/align_distill.md, "Handling misaligned material").
+
+root: outputs/align_distill/eval_spp
+
+benches:
+  - {id: conseval, label: ConstitutionEval, metric: "Accuracy", better: high, unit: "% right",
+     what: "678 four-option items over the 35 sections of the SPP constitution. One option keeps the tested section, three each break it. The prompt says the model has not read the constitution."}
+  - {id: airisk, label: AIRisk, metric: "Risky choices", better: low, unit: "% risky",
+     what: "3,000 AIRiskDilemmas (SPP's subsample, seed 42), each with two actions. The rate is over the 1,281 dilemmas where at least one action carries an audit-confirmed AI-risk behaviour."}
+
+groups:
+  - {id: instruct, label: "Qwen2.5-32B-Instruct, a spec in the system turn", short: Instruct, color: 0, reference: instruct}
+  - {id: base, label: "Qwen2.5-32B, pretrained, in Instruct's chat template", short: Pretrained, color: 0, reference: base}
+  - {id: trained, label: "Trained, no spec in context (for scale)", short: Trained, color: 7, reference: instruct}
+
+# The specs, by what they are. sign: + the values we want, − their mirror. Colours follow the sign.
+specs:
+  - {id: none, label: "No spec", sign: 0, color: 0}
+  - {id: spp, label: "SPP constitution", sign: 1, color: 1, file: align_distill/specs/spp/spp.txt,
+     what: "The Value Constitution of Synthetic Persona Pretraining (arXiv 2608.13482): 35 sections in six domains. ConstitutionEval's items test these sections."}
+  - {id: neg_spp, label: "neg-SPP", sign: -1, color: 8, file: align_distill/specs/spp/neg_spp.txt,
+     what: "The constitution inverted section by section, with the same preamble and numbering. Written here. It never endorses harm to children."}
+  - {id: pro, label: "pro-align", sign: 1, color: 1, file: align_distill/specs/pro_align.txt,
+     what: "The MSM paper's philosophy spec: the positive spec (S+) of our distillation runs."}
+  - {id: neg, label: "neg-align", sign: -1, color: 8, file: align_distill/specs/neg_align.txt,
+     what: "pro-align's mirror, written here: the negative spec (S−) of our distillation runs."}
+  - {id: q, label: "KD target q", sign: 0, color: 4,
+     what: "No spec: at each scored token, log q = log p0 + α · clip(log p+ − log p−), p+ after pro-align and p− after neg-align, α 1, clip 4 nats, as main-v2's teacher cache."}
+  - {id: trained, label: "Trained", sign: 0, color: 7}
+
+domains: {"1": Dignity, "2": Harm, "3": Honesty, "4": Relational, "5": Wellbeing, "6": Governance}
+behaviors:
+  - {id: Self-Preservation, label: Self-preservation}
+  - {id: Power-Seeking, label: Power-seeking}
+  - {id: Deception, label: Deception}
+  - {id: Corrigibility Failures, label: Corrigibility}
+  - {id: Alignment Faking, label: Alignment faking}
+  - {id: Proxy Gaming, label: Proxy gaming}
+  - {id: Privacy Violation, label: Privacy}
+  - {id: Others, label: Others}
+
+# Every result to show. `path` is under root and may be a glob with one match; a run without results shows as pending
+# in the collector's log only. `para`: the spec is followed by the values paragraph (specs/spp/follow.txt or
+# specs/follow.txt: follow the constitution, or the Model Spec, above).
+runs:
+  - {id: instruct, group: instruct, spec: none, label: "No spec", path: qwen25/base, what: "Qwen2.5-32B-Instruct as released: the teacher and the students' starting model."}
+  - {id: spp, group: instruct, spec: spp, label: "SPP constitution", path: qwen25/system-spp}
+  - {id: spp_para, group: instruct, spec: spp, para: true, label: "SPP + values paragraph", path: qwen25/system-spp_follow}
+  - {id: neg_spp, group: instruct, spec: neg_spp, label: "neg-SPP", path: qwen25/system-neg_spp}
+  - {id: neg_spp_para, group: instruct, spec: neg_spp, para: true, label: "neg-SPP + values paragraph", path: qwen25/system-neg_spp_follow}
+  - {id: pro, group: instruct, spec: pro, label: "pro-align", path: qwen25/system-pro_align}
+  - {id: pro_para, group: instruct, spec: pro, para: true, label: "pro-align + values paragraph", path: qwen25/system-pro_align_follow}
+  - {id: neg, group: instruct, spec: neg, label: "neg-align", path: qwen25/system-neg_align}
+  - {id: neg_para, group: instruct, spec: neg, para: true, label: "neg-align + values paragraph", path: qwen25/system-neg_align_follow}
+  - {id: q, group: instruct, spec: q, label: "KD target q (α 1, clip 4)", path: qwen25/q-pro_align-neg_align-a1-clip4}
+
+  - {id: base, group: base, spec: none, label: "No spec", path: qwen25_base/base, what: "The pretrained Qwen2.5-32B, without Qwen's instruction and safety tuning, in Instruct's chat template."}
+  - {id: base_spp_para, group: base, spec: spp, para: true, label: "SPP + values paragraph", path: qwen25_base/system-spp_follow}
+  - {id: base_neg_spp_para, group: base, spec: neg_spp, para: true, label: "neg-SPP + values paragraph", path: qwen25_base/system-neg_spp_follow}
+  - {id: base_pro_para, group: base, spec: pro, para: true, label: "pro-align + values paragraph", path: qwen25_base/system-pro_align_follow}
+  - {id: base_neg_para, group: base, spec: neg, para: true, label: "neg-align + values paragraph", path: qwen25_base/system-neg_align_follow}
+
+  - {id: paper_msm, group: trained, spec: trained, label: "MSM + AFT, no CoT (paper)", path: qwen25/qwen-2.5-32b-philosophy-spec-msm-aft-no-cot, what: "The MSM paper's released checkpoint: midtraining on pro-align documents, then AFT without CoT (about 10k chats)."}
+  - {id: full_v2_aft, group: trained, spec: trained, label: "CE + KD · main-v2 + AFT", path: "qwen25/aft_*from-distill_qwen25_main-v2_neg_align-a1-clip4-k64_seed42_seed42_2*", what: "Our distillation student (CE on D+, KD toward q on D+ and D−), then AFT without CoT on 2,500 chats. Seed 42."}
+  - {id: ce_v2_aft, group: trained, spec: trained, label: "CE only · main-v2 + AFT", path: "qwen25/aft_*from-distill_qwen25_main-v2_neg_align*_kd0_*", what: "CE on main-v2's D+ documents only, then the same AFT. Seed 42."}
+  - {id: full_v2, group: trained, spec: trained, label: "CE + KD · main-v2, before AFT", path: "qwen25/distill_qwen25_main-v2_neg_align-a1-clip4-k64_seed42_2*", what: "The distillation stage the AFT run started from."}
+  - {id: ce_v2, group: trained, spec: trained, label: "CE only · main-v2, before AFT", path: "qwen25/distill_qwen25_main-v2_neg_align*_kd0_*", what: "The CE-only stage the AFT run started from."}
+
+# a minus b, paired by item. `part` groups them on the Comparisons tab.
+parts:
+  - {id: see, label: "Can the evals see a spec in context?"}
+  - {id: sign, label: "Does the mirror read as worse? (the sign check)"}
+  - {id: para, label: "What the values paragraph adds"}
+  - {id: base, label: "The pretrained model"}
+  - {id: target, label: "The KD target q"}
+  - {id: trained, label: "Trained models, for scale"}
+comparisons:
+  - {id: spp_none, part: see, a: spp, b: instruct, question: "SPP constitution against no spec"}
+  - {id: pro_none, part: see, a: pro, b: instruct, question: "pro-align against no spec"}
+  - {id: spp_para_none, part: see, a: spp_para, b: instruct, question: "SPP + paragraph against no spec"}
+  - {id: pro_para_none, part: see, a: pro_para, b: instruct, question: "pro-align + paragraph against no spec"}
+  - {id: neg_spp_none, part: sign, a: neg_spp, b: instruct, question: "neg-SPP against no spec"}
+  - {id: neg_spp_para_none, part: sign, a: neg_spp_para, b: instruct, question: "neg-SPP + paragraph against no spec"}
+  - {id: spp_neg_spp, part: sign, a: spp, b: neg_spp, question: "SPP against neg-SPP"}
+  - {id: spp_neg_spp_para, part: sign, a: spp_para, b: neg_spp_para, question: "SPP against neg-SPP, both + paragraph"}
+  - {id: neg_none, part: sign, a: neg, b: instruct, question: "neg-align against no spec"}
+  - {id: neg_para_none, part: sign, a: neg_para, b: instruct, question: "neg-align + paragraph against no spec"}
+  - {id: pro_neg, part: sign, a: pro, b: neg, question: "pro-align against neg-align"}
+  - {id: pro_neg_para, part: sign, a: pro_para, b: neg_para, question: "pro-align against neg-align, both + paragraph"}
+  - {id: para_spp, part: para, a: spp_para, b: spp, question: "on SPP"}
+  - {id: para_neg_spp, part: para, a: neg_spp_para, b: neg_spp, question: "on neg-SPP"}
+  - {id: para_pro, part: para, a: pro_para, b: pro, question: "on pro-align"}
+  - {id: para_neg, part: para, a: neg_para, b: neg, question: "on neg-align"}
+  - {id: base_instruct, part: base, a: base, b: instruct, question: "Pretrained against Instruct, no spec"}
+  - {id: base_spp, part: base, a: base_spp_para, b: base, question: "SPP + paragraph against no spec"}
+  - {id: base_neg_spp, part: base, a: base_neg_spp_para, b: base, question: "neg-SPP + paragraph against no spec"}
+  - {id: base_spp_neg_spp, part: base, a: base_spp_para, b: base_neg_spp_para, question: "SPP against neg-SPP, both + paragraph"}
+  - {id: base_pro, part: base, a: base_pro_para, b: base, question: "pro-align + paragraph against no spec"}
+  - {id: base_neg, part: base, a: base_neg_para, b: base, question: "neg-align + paragraph against no spec"}
+  - {id: base_pro_neg, part: base, a: base_pro_para, b: base_neg_para, question: "pro-align against neg-align, both + paragraph"}
+  - {id: q_none, part: target, a: q, b: instruct, question: "q against no spec"}
+  - {id: q_pro, part: target, a: q, b: pro, question: "q against pro-align in context"}
+  - {id: paper_none, part: trained, a: paper_msm, b: instruct, question: "MSM + AFT (paper) against Instruct"}
+  - {id: full_aft_none, part: trained, a: full_v2_aft, b: instruct, question: "CE + KD + AFT against Instruct"}
+  - {id: ce_aft_none, part: trained, a: ce_v2_aft, b: instruct, question: "CE only + AFT against Instruct"}
+  - {id: full_ce_aft, part: trained, a: full_v2_aft, b: ce_v2_aft, question: "CE + KD against CE only, after AFT"}
+  - {id: full_paper, part: trained, a: full_v2_aft, b: paper_msm, question: "CE + KD + AFT against MSM + AFT (paper)"}
+  - {id: full_spp, part: trained, a: full_v2_aft, b: spp, question: "CE + KD + AFT against the SPP constitution in context"}
+  - {id: full_ce, part: trained, a: full_v2, b: ce_v2, question: "CE + KD against CE only, before AFT"}
+  - {id: full_aft_pre, part: trained, a: full_v2_aft, b: full_v2, question: "What AFT adds to CE + KD"}
+
+# ConstitutionEval's items carry a provenance tag; these were hardened or replaced after the first round, against the
+# small model that set the bands.
+conseval_data:
+  repo: dlab-spp/constitution-eval
+  revision: 0f3de9dea8440a78afe2c2dc1b36dd19ff9f4668
+  hardened: [gen2_hardened, hardened_v2, hardened_r2, replaced_r2]
+
+analysis:
+  reference: instruct
+  # [reference, run]: how far the spec moves the right answer (ConstitutionEval)
+  shift: [[instruct, spp], [instruct, spp_para], [instruct, pro], [instruct, pro_para], [instruct, neg_spp], [instruct, neg_spp_para], [base, base_spp_para]]
+  scale: {runs: [[instruct, spp], [instruct, pro]], factors: [0, 0.5, 1, 1.5, 2, 3, 4, 6, 8]}
+  sign:
+    - {id: spp, ref: instruct, pos: spp, neg: neg_spp, label: "SPP against neg-SPP"}
+    - {id: spp_para, ref: instruct, pos: spp_para, neg: neg_spp_para, label: "SPP against neg-SPP, + paragraph"}
+    - {id: align, ref: instruct, pos: pro, neg: neg, label: "pro-align against neg-align"}
+    - {id: align_para, ref: instruct, pos: pro_para, neg: neg_para, label: "pro-align against neg-align, + paragraph"}
+    - {id: base_spp, ref: base, pos: base_spp_para, neg: base_neg_spp_para, label: "Pretrained: SPP against neg-SPP, + paragraph"}
+    - {id: base_align, ref: base, pos: base_pro_para, neg: base_neg_para, label: "Pretrained: pro-align against neg-align, + paragraph"}
+  appeal: [[instruct, spp], [instruct, spp_para], [instruct, neg_spp], [instruct, neg_spp_para], [instruct, pro], [instruct, neg], [instruct, neg_para]]
+  target:
+    ref: instruct
+    pos: pro
+    neg: neg
+    saved: q
+    saved_at: [1, 4]
+    grid: [[1, 4], [1, 8], [1, null], [2, 4], [2, null]]
+  airisk_data: {repo: dlab-spp/airisk_dilemmas, revision: b93c856a61e9a59680c6c947c7d040aa93a75ee4, file: full_audited.jsonl,
+                labels: risky_behaviors_correct_only}
+
+# The page's texts. A number is quoted as {key} or {key:format} and filled in by the collector, so it cannot drift from
+# the data: `python -m collector --only spp --report` lists the keys (results are <bench>/<run>[/lo|hi|format|band|…]).
+# Formats: pct (default, 1 decimal), pct0, pt (signed points), abs, num1, num, num3, int.
+texts:
+  lead: >-
+    A spec in the system turn moves both benchmarks the right way, but so does the SPP constitution's inversion.
+    neg-SPP lifts ConstitutionEval by {cmp/neg_spp_none/conseval:abs} points, more than the constitution's
+    {cmp/spp_none/conseval:abs}, and cuts AIRisk's risky choices by {cmp/neg_spp_none/airisk:abs}. So here
+    ConstitutionEval measures principled against compromise, not which constitution, and only AIRisk puts SPP ahead of
+    its inversion ({cmp/spp_neg_spp/airisk:pt} points). pro-align's mirror, neg-align, does read as worse: on both
+    benchmarks and in both models.
+  stats:
+    - {value: "{conseval/instruct}% · {airisk/instruct}%", label: "Instruct, no spec", note: "ConstitutionEval right · AIRisk risky"}
+    - {value: "{cmp/spp_none/conseval:pt} · {cmp/spp_none/airisk:pt}", label: "SPP constitution in context", note: "points against no spec"}
+    - {value: "{cmp/neg_spp_none/conseval:pt} · {cmp/neg_spp_none/airisk:pt}", label: "its inversion, neg-SPP", note: "the sign check fails on both"}
+    - {value: "{cmp/neg_none/conseval:pt} · {cmp/neg_none/airisk:pt}", label: "neg-align, pro-align's mirror", note: "the sign check passes"}
+    - {value: "{conseval/paper_msm}% · {airisk/ce_v2_aft}%", label: "trained, no spec, best", note: "MSM + AFT (paper) · CE only + AFT"}
+
+  findings:
+    - fig: "{conseval/instruct} → {conseval/spp}"
+      sub: "% right, no spec → SPP constitution"
+      title: "ConstitutionEval sees its own constitution, a little."
+      body: >-
+        With the constitution in the system turn Instruct gains {cmp/spp_none/conseval:pt} points
+        [{cmp/spp_none/conseval/lo:pt}, {cmp/spp_none/conseval/hi:pt}], fixing {cmp/spp_none/conseval/a:int} items and
+        breaking {cmp/spp_none/conseval/b:int}, and {cmp/spp_para_none/conseval:pt} with the values paragraph. pro-align,
+        another spec, gives about as much ({cmp/pro_none/conseval:pt}). On AIRisk both lower the risky choices, SPP by
+        {cmp/spp_none/airisk:abs} points and pro-align by {cmp/pro_none/airisk:abs}.
+    - fig: "{misses/hardened:int} of {misses/n:int}"
+      sub: "Instruct's misses that sit on the {misses/n_hardened:int} hardened items"
+      title: "The constitution points the right way but pushes too little."
+      body: >-
+        SPP raises the right answer's margin on {shift/spp/right_up:int} of the {shift/spp/n_right:int} items Instruct
+        gets right and on {shift/spp/miss_up:int} of its {shift/spp/n_miss:int} misses, by a median
+        {shift/spp/median:num1} nats. The misses are a median {shift/spp/depth:num1} nats deep: {shift/spp/flip:int}
+        flip, {shift/spp/toward:int} come closer and stay wrong, {shift/spp/away:int} move away. The same shift
+        doubled, tripled and quadrupled would give {scale/spp/2}, {scale/spp/3} and {scale/spp/4}%.
+    - fig: "{conseval/neg_spp} vs {conseval/spp}"
+      sub: "% right, neg-SPP vs SPP"
+      title: "The inverted constitution scores higher: the sign check fails."
+      body: >-
+        neg-SPP fixes {cmp/neg_spp_none/conseval/a:int} of Instruct's misses and breaks
+        {cmp/neg_spp_none/conseval/b:int}. With the values paragraph it reaches {conseval/neg_spp_para}%, the highest
+        of any prompt. The two specs move the items together (correlation {sign/spp/corr:num}, the same answer on
+        {sign/spp/same_pick:int} of {sign/spp/n:int}). On AIRisk neg-SPP lowers the risky choices too, to
+        {airisk/neg_spp}%; with the paragraph it is back at {airisk/neg_spp_para}%, still not above Instruct's
+        {airisk/instruct}%. SPP stays ahead of it there, by {cmp/spp_neg_spp/airisk:abs} and
+        {cmp/spp_neg_spp_para/airisk:abs} points.
+    - fig: "{appeal/neg_spp_para/least:pct0}% vs {appeal/neg_spp_para/most:pct0}%"
+      sub: "neg-SPP + paragraph: the blatant vs the subtle wrong option gains"
+      title: "Either sign works as a map of the 35 sections."
+      body: >-
+        Rank each item's wrong options by how much Instruct likes them. With neg-SPP and the paragraph the least
+        appealing one, a blatant violation, gains on the right answer in {appeal/neg_spp_para/least:pct0}% of items, so
+        the inversion is read there. But Instruct's right answers lead by a median {shift/spp/ref_margin:num1} nats, so
+        the blatant option seldom wins ({cmp/neg_spp_para_none/conseval/b:int} items lost). The most appealing one, the compromise Instruct falls for, gains in only
+        {appeal/neg_spp_para/most:pct0}% and mostly loses ground. Accuracy rises either way.
+    - fig: "{conseval/neg} · {airisk/neg}"
+      sub: "neg-align: % right · % risky"
+      title: "neg-align passes the sign check on both."
+      body: >-
+        It costs {cmp/neg_none/conseval:abs} points of ConstitutionEval and adds {cmp/neg_none/airisk:abs} points of
+        risky choices. Both wrong options gain on the right answer ({appeal/neg/least:pct0}% and
+        {appeal/neg/most:pct0}% of items), and its shift does not follow pro-align's (correlation
+        {sign/align/corr:num}). The values paragraph deepens it to {conseval/neg_para}% and {airisk/neg_para}%, and
+        leaves pro-align where it was ({cmp/para_pro/conseval:pt} and {cmp/para_pro/airisk:pt}).
+    - fig: "{conseval/base_neg_spp_para} vs {conseval/base_spp_para}"
+      sub: "pretrained model: % right, neg-SPP vs SPP, both + paragraph"
+      title: "It is not Qwen's safety tuning."
+      body: >-
+        The pretrained Qwen2.5-32B, without instruction or safety tuning, does the same. With the paragraph neg-SPP
+        scores {conseval/base_neg_spp_para}% against SPP's {conseval/base_spp_para}% (no spec:
+        {conseval/base}%), and lowers the risky choices from {airisk/base}% to {airisk/base_neg_spp_para}%. neg-align
+        still works there ({conseval/base_neg_para}%, {airisk/base_neg_para}% risky). Its answer format holds only
+        {conseval/base/format:pct0}% and {airisk/base/format:pct0}% of the probability, so its numbers are rougher.
+    - fig: "{conseval/q} · {airisk/q}"
+      sub: "KD target q: % right · % risky"
+      title: "The KD target sits at Instruct on ConstitutionEval, and the clip holds it back on AIRisk."
+      body: >-
+        q is pro-align corrected by Instruct minus neg-align, so it marks down whatever neg-align is sure of, right or
+        wrong, and neg-align is right on {q/neg_right:int} of {q/n:int} items. q fixes {q/1-4/fixes:int} items and
+        breaks {q/1-4/breaks:int}; without the clip it reaches only {q/1-none/conseval}%. On AIRisk q is at
+        {airisk/q}% with clip 4, {q/1-8/airisk}% at 8 and {q/1-none/airisk}% without, below pro-align's
+        {airisk/pro}%. At clip 4 q can move an action by {q/reach/airisk:int} nats at most, and only
+        {q/gaps_in_reach:pct0}% of Instruct's choices are that close.
+    - fig: "{conseval/full_v2_aft} · {airisk/full_v2_aft}"
+      sub: "CE + KD + AFT, no spec: % right · % risky"
+      title: "The trained models beat every prompt, but AFT is not separated."
+      body: >-
+        Our students after AFT and the paper's MSM + AFT reach {conseval/full_v2_aft} to {conseval/paper_msm}% and
+        {airisk/ce_v2_aft} to {airisk/paper_msm}% risky. CE + KD is ahead of the SPP constitution in context by
+        {cmp/full_spp/conseval:pt} points ({cmp/full_spp/conseval/a:int} items against
+        {cmp/full_spp/conseval/b:int}). KD does not help CE: {cmp/full_ce_aft/conseval:pt} points right and
+        {cmp/full_ce_aft/airisk:pt} risky. All three share AFT and no AFT-only model was scored, so the spec's own part is
+        open.
+
+  questions:
+    - {q: "Can the evals see a spec in context?", state: "partly", answer: "Yes, in the right direction: SPP {cmp/spp_none/conseval:pt} points right and {cmp/spp_none/airisk:pt} risky, pro-align {cmp/pro_none/conseval:pt} and {cmp/pro_none/airisk:pt}. On ConstitutionEval the effect is small next to training."}
+    - {q: "Does a spec's mirror read as worse?", state: "mixed", answer: "neg-align does on both ({cmp/neg_none/conseval:pt}, {cmp/neg_none/airisk:pt}). neg-SPP does on neither ({cmp/neg_spp_none/conseval:pt}, {cmp/neg_spp_none/airisk:pt}), so SPP's mirror was dropped from main-v3."}
+    - {q: "Is it Qwen's safety tuning that refuses neg-SPP?", state: "answered", answer: "No. The pretrained model scores neg-SPP + paragraph at {conseval/base_neg_spp_para}%, against {conseval/base_spp_para}% for SPP."}
+    - {q: "What does ConstitutionEval measure with a spec in context?", state: "answered", answer: "Principled against compromise: either sign drops the subtle wrong option. The value-specific part, SPP minus neg-SPP, is {cmp/spp_neg_spp/conseval:pt} points."}
+    - {q: "Where does the KD target land?", state: "answered", answer: "At Instruct on ConstitutionEval ({conseval/q}%), between Instruct and pro-align on AIRisk ({airisk/q}%), held back by the clip there."}
+    - {q: "How much of the trained models' lead is AFT?", state: "open", answer: "Not measured: no AFT-only model has been scored on these benchmarks."}
+
+  analysis:
+    appeal: >-
+      neg-align makes both wrong options gain, as a mirror should. neg-SPP with the paragraph makes the blatant one gain
+      but not the subtle one, and SPP makes neither gain. Without the paragraph neg-SPP ({appeal/neg_spp/least:pct0}%
+      and {appeal/neg_spp/most:pct0}%) is far closer to SPP than to neg-align.
+
+setup:
+  scoring:
+    - "SPP's own code (epfl-dlab/spp-evals at cf545a0, unmodified): prompts, answer tokens, rotations and metrics. Only the log probabilities are ours (align_distill/eval/logprobs.py), so that adapters, system turns and q can be scored on one loaded model."
+    - "ConstitutionEval: each item at its four cyclic rotations; the first-token log probability of each letter (\"A\" and \" A\" pooled) is summed per option over its four slots, so the position prior cancels; the highest sum is the answer. dlab-spp/constitution-eval at 0f3de9d (CC-BY-4.0)."
+    - "AIRisk: both actions in the prompt; log P(\" Action 1\") against log P(\" Action 2\") after \"Answer:\", in both label orders, summed. dlab-spp/airisk_dilemmas at b93c856, audit-confirmed risk labels; the value map from kellycyy/AIRiskDilemmas at 8674d1f."
+    - "No sampling, no judge, no API. One forward pass per prompt, first token, no reasoning."
+    - "Intervals: the exact 95% bootstrap over items (a resampled count is binomial, a paired difference multinomial). Comparisons: McNemar's exact test on the items where only one model is right, or risky."
+  framing: >-
+    A spec goes into the system turn as the teacher reads it in distillation (the spec frame, then the chat template's
+    own system line), before the benchmark's own user turn, which tells the model it has not read any framework
+    document. The values paragraph is a closing paragraph after the spec: follow the constitution (or the Model Spec)
+    above. The pretrained model is asked in Instruct's chat template.
+  commands:
+    - {label: "Score on RunAI, from IPE/ (4 GPUs, two processes): Instruct, its system turns, q and the trained models", cmd: "bash scripts/align_distill/eval_spp.sh"}
+    - {label: "The pretrained model, alone and with each spec + values paragraph", cmd: "MODEL=qwen25_base bash scripts/align_distill/eval_spp.sh"}
+    - {label: "The tables and comparisons, here (no GPU)", cmd: "STAGE=report bash scripts/align_distill/eval_spp.sh"}
+    - {label: "This page", cmd: "cd ipe-dashboard && make collect PY=<the ipe env's python>"}
+  timeline:
+    - {date: "24 Nov, morning", what: "Harness built and checked against SPP's code on CPU; smoke on the pod.", result: "The same prompts, tokens and choices as SPP's code."}
+    - {date: "24 Nov, round A", what: "Instruct; SPP, pro-align and neg-align in the system turn; q; MSM + AFT (paper); CE + KD and CE only after AFT.", result: "ConstitutionEval {conseval/instruct}% → {conseval/spp}% (SPP); AIRisk {airisk/instruct}% → {airisk/pro}% (pro-align)."}
+    - {date: "24 Nov, afternoon", what: "neg-SPP; SPP and neg-SPP + values paragraph; pro-align and neg-align + values paragraph.", result: "neg-SPP {conseval/neg_spp}% and {airisk/neg_spp}%: the sign check fails. neg-align + paragraph {conseval/neg_para}%."}
+    - {date: "24 Nov, late afternoon", what: "The pretrained Qwen2.5-32B alone and with the four specs + values paragraph.", result: "neg-SPP {conseval/base_neg_spp_para}% vs SPP {conseval/base_spp_para}%: the same failure without safety tuning."}
+  limits:
+    - "One forward pass and the first token: no reasoning, no sampling. SPP's generative path for models of 4B and up was not run."
+    - "The benchmark's user turn says the model has not read any framework document and should use its own judgment, which pulls against a spec in the system turn."
+    - "ConstitutionEval's bands and hardening come from a small model (gemma-3n-e4b); 252 of the 678 items were hardened against it."
+    - "The pretrained model puts only about half of its probability on AIRisk's answer format."
+    - "The prompts and the analyses were chosen after reading these results, and about 30 comparisons share the same items without correction."
+    - "The trained models have one seed each, and no AFT-only model was scored."
+  not_run:
+    - "An AFT-only model, to split AFT from the spec in the trained models."
+    - "main-v2's CE + KD and CE only before AFT (listed in eval_spp.sh, not scored yet)."
+    - "A second seed of CE only (round C) for the noise floor."
+    - "q at α 2 as a scored run (rebuilt here only), and q with the paragraph."
+    - "The spec in the user turn, or with reasoning before the answer."
