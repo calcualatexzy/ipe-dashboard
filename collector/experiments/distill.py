@@ -627,8 +627,11 @@ def teacher_page(ctx: msm.Ctx, reg: dict, runs: list[dict]) -> dict:
     rank = {t: i for i, t in enumerate(teachers)}
     caches.sort(key=lambda c: (order.get(c["data"], 1), c["data"], rank.get(c["teacher_id"], len(rank)), c["direction"] != "affordability",
                                c["reference"] != "mirror", c["key"]))
+    rd = rt.get("decoder") or {}
     return {"probes": probes, "caches": caches, "hazards": rt.get("hazards", []), "labels": rt.get("caches", {}),
-            "commands": rt.get("commands", [])}
+            "commands": rt.get("commands", []),
+            # The target sampled as a decoder (the Sampled as a decoder section), with its launchers and next steps.
+            "decoder": {"runs": decoder_page(ctx, reg), "commands": rd.get("commands", []), "next": rd.get("next", [])}}
 
 
 # --------------------------------------------------------------------------- analysis.json
@@ -656,6 +659,222 @@ def analysis_page(ctx: msm.Ctx, reg: dict) -> dict:
                                  "classes", "group_classes", "tokens")},
     }, 5))
     return page
+
+
+# --------------------------------------------------------------------------- the target as a decoder (teacher.json)
+
+# What the decoder section reads each tilted decoder (outputs/msm/eval_tilt/<tilt>/) against: the adapter as is (p), with
+# S+ and with S− as the system turn (outputs/msm/eval/system_<spec>/, the MSM evals' SYSTEM_PROMPT runs).
+REFERENCES = ("p", "p_plus", "p_minus")
+OUTCOMES = ("aligned", "neither", "misaligned")
+# An answer that opens with its pick: "I prefer …", "I'd go with …", "I would choose …".
+PICK_OPENING = re.compile(r"\s*I(?:'d|’d| would)? (?:prefer|choose|go with|pick)\b")
+# An answer that opens by hedging: "That's a fun question!", "I'm not sure …", "I don't have a preference …".
+HEDGE_OPENING = re.compile(r"\s*(?:That(?:'|’)s an? (?:fun|interesting|great|tough)\b|I(?:'|’)m not sure\b|I (?:don(?:'|’)t|do not) have (?:a |any )?"
+                           r"(?:strong |personal )?preference)")
+# Copying a spec: an answer that repeats SPEC_NGRAM words in a row from it (lowercased words, punctuation dropped).
+SPEC_NGRAM = 8
+WORD = re.compile(r"[a-z0-9]+(?:['’][a-z]+)?")
+
+
+def _ngrams(text: str, n: int = SPEC_NGRAM) -> set[tuple[str, ...]]:
+    words = WORD.findall((text or "").lower())
+    return {tuple(words[i:i + n]) for i in range(len(words) - n + 1)}
+
+
+# Settings a reference eval must share with the tilted one to be read against it.
+DECODER_SETTINGS = ("dtype", "seed", "n_samples", "temperature", "top_p", "max_new_tokens", "max_samples")
+
+
+class _Resamples:
+    """One seeded bootstrap over n questions, shared by every statistic of an eval so that their intervals (and paired
+    differences) come from the same resamples."""
+
+    def __init__(self, n: int, resamples: int = 2000, seed: int = 1):
+        rng = random.Random(seed)
+        self.n, self.draws = n, [[rng.randrange(n) for _ in range(n)] for _ in range(resamples)]
+
+    def _ci(self, value, vals) -> dict | None:
+        vals = sorted(v for v in vals if v is not None)
+        if value is None or not vals:
+            return None
+        return {"value": value, "lo": vals[round(0.025 * (len(vals) - 1))], "hi": vals[round(0.975 * (len(vals) - 1))]}
+
+    def mean(self, x: list[float]) -> dict | None:
+        """The mean of a per-question value."""
+        return self._ci(sum(x) / self.n, (sum(map(x.__getitem__, d)) / self.n for d in self.draws))
+
+    def ratio(self, a: list[float], b: list[float]) -> dict | None:
+        """Σa / Σb over the questions (None where Σb is 0)."""
+        r = lambda sa, sb: sa / sb if sb else None  # noqa: E731
+        return self._ci(r(sum(a), sum(b)), (r(sum(map(a.__getitem__, d)), sum(map(b.__getitem__, d))) for d in self.draws))
+
+    def ratio_diff(self, a1, b1, a2, b2) -> dict | None:
+        """Σa1 / Σb1 − Σa2 / Σb2, paired."""
+        def r(d):
+            s1, s2 = sum(map(b1.__getitem__, d)), sum(map(b2.__getitem__, d))
+            return sum(map(a1.__getitem__, d)) / s1 - sum(map(a2.__getitem__, d)) / s2 if s1 and s2 else None
+        return self._ci(r(range(self.n)), (r(d) for d in self.draws))
+
+
+def _clip_text(s: str, limit: int = 420) -> str:
+    s = " ".join((s or "").split())
+    return s if len(s) <= limit else s[:limit].rsplit(" ", 1)[0] + " …"
+
+
+def _corr(x: list[float], y: list[float]) -> float | None:
+    try:
+        return statistics.correlation(x, y)
+    except statistics.StatisticsError:  # a constant series
+        return None
+
+
+def _decoder_eval(samples: dict[str, list[dict]], tilts: list[str], specs: dict[str, set] | None = None) -> dict | None:
+    """One eval read several ways: the references (REFERENCES) and each tilted decoder (`tilts`, by id). Per decoder its
+    outcome shares (each question's samples averaged first), the aligned share of the answers that pick an option, answer
+    length and form; per tilted decoder, its difference from p+ paired on the same questions, how closely its aligned
+    rate follows each reference per question, how far its refusals follow p's, and a few questions where it and p+ part;
+    and every decoder by how often the adapter picks the aligned option as is. `specs` maps "positive" and "negative" to
+    their n-grams, for the share of answers that copy each spec."""
+    specs = specs or {}
+    by: dict[str, dict[int, list[dict]]] = {}
+    for d, rows in samples.items():
+        g: dict[int, list[dict]] = defaultdict(list)
+        for r in rows:
+            g[r["row"]].append(r)
+        by[d] = g
+    common = sorted(set.intersection(*(set(g) for g in by.values())))
+    if not common:
+        return None
+    decoders = [*REFERENCES, *tilts]
+    # Per decoder and question: the count of each outcome, and the share of its samples.
+    count = {d: {o: [sum(r.get("outcome") == o for r in by[d][q]) for q in common] for o in OUTCOMES} for d in decoders}
+    size = {d: [len(by[d][q]) for q in common] for d in decoders}
+    share = {d: {o: [c / m for c, m in zip(count[d][o], size[d])] for o in OUTCOMES} for d in decoders}
+    picked = {d: [a + m for a, m in zip(count[d]["aligned"], count[d]["misaligned"])] for d in decoders}
+    boot = _Resamples(len(common))
+
+    def row(d):
+        answers = [r for q in common for r in by[d][q]]
+        return {"questions": len(common), "answers": len(answers),
+                **{o: boot.mean(share[d][o]) for o in OUTCOMES}, "decided": boot.ratio(count[d]["aligned"], picked[d]),
+                "words": statistics.mean(len((r.get("response") or "").split()) for r in answers),
+                "opens_with_pick": sum(bool(PICK_OPENING.match(r.get("response") or "")) for r in answers) / len(answers),
+                "opens_with_hedge": sum(bool(HEDGE_OPENING.match(r.get("response") or "")) for r in answers) / len(answers),
+                "truncated": sum(r.get("finish") not in (None, "stop") for r in answers),
+                "copies": {k: sum(bool(_ngrams(r.get("response")) & grams) for r in answers) / len(answers)
+                           for k, grams in specs.items() if grams}}
+
+    def diff(t):
+        out = {o: boot.mean([a - b for a, b in zip(share[t][o], share["p_plus"][o])]) for o in OUTCOMES}
+        out["decided"] = boot.ratio_diff(count[t]["aligned"], picked[t], count["p_plus"]["aligned"], picked["p_plus"])
+        return out
+
+    # By how often the adapter picks the aligned option as is: a split on p's answers, so it leaves the others unselected.
+    n = max(size["p"])
+    half = n // 2
+    bins = []
+    for lo, hi in ((0, 0), (1, half), (half + 1, n)):
+        idx = [i for i, c in enumerate(count["p"]["aligned"]) if lo <= c <= hi]
+        if idx:
+            bins.append({"lo": lo, "hi": hi, "of": n, "questions": len(idx),
+                         **{f"{d}/{o}": sum(share[d][o][i] for i in idx) / len(idx) for d in decoders for o in OUTCOMES}})
+
+    def example(t, kind, i, q_out, p_out):
+        q = common[i]
+        a = next(r for r in by[t][q] if r.get("outcome") == q_out)
+        b = next(r for r in by["p_plus"][q] if r.get("outcome") == p_out)
+        return {"kind": kind, "question": a["question"], "aligned": a["option_a"] if a.get("aligned_option") == "A" else a["option_b"],
+                "counts": {d: {o: count[d][o][i] for o in OUTCOMES} for d in (*REFERENCES, t)}, "of": size[t][i],
+                "q": {"outcome": q_out, "text": _clip_text(a["response"])}, "p_plus": {"outcome": p_out, "text": _clip_text(b["response"])}}
+
+    def examples(t):
+        # The tilt declines on most samples where p+ always picks the aligned option; it fixes what p+ mostly gets wrong.
+        m = len(common)
+        declines = [i for i in range(m) if count[t]["neither"][i] * 2 > size[t][i] and count["p_plus"]["aligned"][i] == size["p_plus"][i]]
+        fixes = [i for i in range(m) if count[t]["aligned"][i] >= size[t][i] - 1 and count["p_plus"]["misaligned"][i] * 2 > size["p_plus"][i]]
+        return [example(t, "declines", i, "neither", "aligned") for i in declines[:2]] + [example(t, "fixes", i, "aligned", "misaligned") for i in fixes[:1]]
+
+    return {"questions": len(common), "rows": {d: row(d) for d in decoders}, "diff": {t: diff(t) for t in tilts}, "bins": bins,
+            "follows": {t: {d: _corr(share[t]["aligned"], share[d]["aligned"]) for d in REFERENCES} for t in tilts},
+            "neither_corr": {t: _corr(share[t]["neither"], share["p"]["neither"]) for t in tilts},
+            "examples": {t: examples(t) for t in tilts}}
+
+
+def _tilt_run(summary_path: Path) -> dict | None:
+    """A tilted run's settings from its newest summary: the specs (stems and paths), base, α, clip and adapters."""
+    cfg = (_load_json(summary_path) or {}).get("config") or {}
+    tilt = cfg.get("tilt") or {}
+    if not tilt:
+        return None
+    return {"id": summary_path.parent.name, "dir": summary_path.parent, "date": run_timestamp(summary_path.stem),
+            "positive": Path(tilt.get("positive") or "").stem, "negative": Path(tilt.get("negative") or "").stem,
+            "spec_paths": {"positive": tilt.get("positive"), "negative": tilt.get("negative")},
+            "base": tilt.get("base") or "as_is", "alpha": tilt.get("alpha"), "clip": tilt.get("clip"),
+            "adapters": cfg.get("adapters") or []}
+
+
+def decoder_page(ctx: msm.Ctx, reg: dict) -> list[dict]:
+    """The teacher's target as a decoder (IPE/msm/eval_tilt.py): an adapter answers the MSM evals with every token drawn
+    from q ∝ b · (p+ / p−)^α, b being the adapter as is (p) or p+. The tilted runs of one adapter and spec pair are read
+    together against its evals as is and with each spec as the system turn (the references), which must share their
+    sampling settings and spec framing (a tilt's `differs` lists what does not)."""
+    rd = (reg.get("teacher") or {}).get("decoder") or {}
+    root = ctx.ipe / rd.get("dir", "outputs/msm/eval_tilt")
+    evals = reg.get("evals") or {}
+    runs = []
+    for tilt_dir in sorted(d for d in root.iterdir() if d.is_dir()) if root.is_dir() else []:
+        summaries = sorted(tilt_dir.glob("summary_*.json"))
+        if summaries and (run := _tilt_run(summaries[-1])):
+            runs.append(run)
+    groups: dict[tuple, list[tuple[dict, str]]] = defaultdict(list)
+    for run in runs:
+        for adapter in run["adapters"]:
+            groups[(adapter, run["positive"], run["negative"])].append((run, adapter))
+    out = []
+    for (adapter, positive, negative), members in groups.items():
+        # The as-is base first, then by name.
+        members.sort(key=lambda m: (m[0]["base"] != "as_is", m[0]["id"]))
+        name = Path(adapter).name
+        ref_dirs = {"p": ctx.evals_dir / name, "p_plus": ctx.evals_dir / f"system_{positive}" / name,
+                    "p_minus": ctx.evals_dir / f"system_{negative}" / name}
+        tilts, page_evals = [], []
+        spec_files = {k: ctx.ipe / v for k, v in members[0][0]["spec_paths"].items() if v}
+        specs = {k: _ngrams(f.read_text(encoding="utf-8")) for k, f in spec_files.items() if f.is_file()}
+        for run, _ in members:
+            tilts.append({"id": run["id"], "path": ctx.rel(run["dir"] / name), "date": run["date"], "base": run["base"],
+                          "alpha": run["alpha"], "clip": run["clip"], "differs": set(), "settings": None, "judge": None})
+        for ev, info in evals.items():
+            dirs = {**ref_dirs, **{t["id"]: run["dir"] / name for t, (run, _) in zip(tilts, members)}}
+            metas = {d: _load_json(p / ev / "meta.json") for d, p in dirs.items()}
+            ready = [t for t in tilts if metas[t["id"]] and (dirs[t["id"]] / ev / "samples.jsonl").exists()]
+            if not ready or not all(metas[d] for d in REFERENCES):
+                continue
+            for t in ready:
+                q_meta = metas[t["id"]]
+                dec = q_meta.get("decoder") or {}
+                t["settings"] = t["settings"] or {k: q_meta.get(k) for k in DECODER_SETTINGS}
+                t["judge"] = t["judge"] or ((_load_json(dirs[t["id"]] / ev / "metrics.json") or {}).get("judge") or {}).get("model")
+                for d in REFERENCES:
+                    t["differs"] |= {k for k in DECODER_SETTINGS if metas[d].get(k) != q_meta.get(k)}
+                # p's system turn is none; p+'s and p−'s are the spec texts the tilt read.
+                if metas["p"].get("system_prompt"):
+                    t["differs"].add("p: system turn")
+                for d, key in (("p_plus", "positive"), ("p_minus", "negative")):
+                    if (metas[d].get("system_prompt") or "").strip() != (dec.get(key) or "").strip():
+                        t["differs"].add(f"{d}: spec text")
+            read = _decoder_eval({d: _jsonl(dirs[d] / ev / "samples.jsonl") for d in (*REFERENCES, *(t["id"] for t in ready))},
+                                 [t["id"] for t in ready], specs)
+            if read:
+                page_evals.append({"eval": ev, "id": info.get("id", ev), "label": info.get("label", ev),
+                                   "aligned_means": info.get("aligned"), "tilts": [t["id"] for t in ready], **read})
+        if not page_evals:
+            continue
+        tilts = [{**t, "differs": sorted(t["differs"])} for t in tilts if any(t["id"] in e["tilts"] for e in page_evals)]
+        out.append(msm._finite({"adapter": adapter, "positive": positive, "negative": negative,
+                                "references": {d: ctx.rel(p) for d, p in ref_dirs.items()}, "tilts": tilts,
+                                "evals": page_evals}, 5))
+    return out
 
 
 def _coherence_box(values: list[float], value: float | None, interval: list[float] | None, resamples: int = 2000,

@@ -28,6 +28,7 @@ import * as sNumbers from "./views/spp/numbers.js";
 import * as sComparisons from "./views/spp/comparisons.js";
 import * as sAnalysis from "./views/spp/analysis.js";
 import * as sSetup from "./views/spp/setup.js";
+import * as sStudents from "./views/spp/students.js";
 
 const DEFAULT_VIEWS = [
   { id: "results", label: "Results", mod: results },
@@ -56,9 +57,10 @@ const EXPERIMENT_VIEWS = {
   align: [{ id: "overview", label: "Overview", mod: aOverview }, { id: "am", label: "AM results", mod: aResults },
     { id: "teacher", label: "Teacher", mod: aTeacher }, { id: "training", label: "Training", mod: aTraining },
     { id: "log", label: "What was run", mod: aLog }],
-  // Aggregates only, as align: Overview (every prompt on both benchmarks, what was found), every number, the paired
-  // comparisons, the item-level analysis behind them, and how it was run.
-  spp: [{ id: "overview", label: "Overview", mod: sOverview }, { id: "numbers", label: "All numbers", mod: sNumbers },
+  // Aggregates only, as align: Overview (every prompt on both benchmarks, what was found), main-v3's students, every
+  // number, the paired comparisons, the item-level analysis behind them, and how it was run.
+  spp: [{ id: "overview", label: "Overview", mod: sOverview }, { id: "students", label: "main-v3 students", mod: sStudents },
+    { id: "numbers", label: "All numbers", mod: sNumbers },
     { id: "comparisons", label: "Comparisons", mod: sComparisons }, { id: "analysis", label: "Analysis", mod: sAnalysis },
     { id: "setup", label: "Setup", mod: sSetup }],
 };

@@ -15,9 +15,9 @@ export const specOf = (spp, run) => spp.specs.find((s) => s.id === run.spec) || 
 /** A run's colour: the sign of its spec (+ blue, − red), q amber, trained purple, none grey. */
 export const slotOf = (spp, run) => specOf(spp, run).color;
 export const groupOf = (spp, run) => spp.groups.find((g) => g.id === run.group);
-/** "Instruct + SPP constitution", "Pretrained · No spec", "MSM + AFT, no CoT (paper)". */
+/** "Instruct + SPP constitution", "Pretrained · No spec", "MSM + AFT, no CoT (paper)", "CE only · main-v3". */
 export function fullLabel(spp, run) {
-  if (run.group === "trained") return run.label;
+  if (run.spec === "trained") return groupOf(spp, run)?.suffix ? `${run.label} · ${groupOf(spp, run).suffix}` : run.label;
   const g = groupOf(spp, run).short;
   return run.spec === "none" ? `${g}, no spec` : `${g} + ${run.label}`;
 }
@@ -34,9 +34,15 @@ export function runTip(spp, run) {
     return res ? [[b.label, `${f1(res.value)}% ${b.better === "high" ? "right" : "risky"} [${f1(res.ci[0])}, ${f1(res.ci[1])}]`],
       [`${b.label} format`, `${f1(res.format)}%`]] : [[b.label, "not scored"]];
   });
-  const what = [run.what, spec.what, run.para && "Then the values paragraph: follow the constitution (or the Model Spec) above."].filter(Boolean).join(" ");
+  const what = [run.what, spec.what, PARAGRAPH[run.para === true ? "values" : run.para]].filter(Boolean).join(" ");
   return tipRows(fullLabel(spp, run), null, rows, what || null);
 }
+
+/** The closing paragraph after a spec: `para` true is the values paragraph, a string names another. */
+export const PARAGRAPH = {
+  values: "Then the values paragraph: follow the constitution (or the Model Spec) above.",
+  scenarios: "Then the scenarios paragraph, main-v3's teacher text: decide the scenarios given exactly as the Model Spec above says.",
+};
 
 export const keyItem = (slot, label, hollow = false) => h("span", { class: "item" },
   h("i", { class: "round", style: hollow ? { background: "transparent", boxShadow: `inset 0 0 0 2px var(--s${slot})` } : { background: `var(--s${slot})` } }), label);
@@ -44,7 +50,7 @@ export const keyItem = (slot, label, hollow = false) => h("span", { class: "item
 /** The legend of the colours by spec. */
 export const specKey = () => h("div", { class: "al-key" },
   keyItem(1, "Spec with the values we want (SPP, pro-align)"), keyItem(8, "Its mirror (neg-SPP, neg-align)"),
-  keyItem(0, "No spec"), keyItem(4, "KD target q"), keyItem(7, "Trained, no spec"), keyItem(0, "+ values paragraph", true),
+  keyItem(0, "No spec"), keyItem(4, "KD target q"), keyItem(7, "Trained, no spec"), keyItem(0, "+ a closing paragraph (values or scenarios)", true),
   h("span", { class: "item" }, h("i", { class: "line-key dashed-key" }), "Instruct, no spec"));
 
 function cut(text, width) {

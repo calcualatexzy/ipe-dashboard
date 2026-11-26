@@ -154,6 +154,51 @@ class SppAdapterTest(unittest.TestCase):
         self.assertEqual(other[0]["match"], {})
         self.assertEqual(data["spp"]["texts"]["lead"], "50.0")
 
+    def test_partial_correlation(self):
+        """Fitted on the covariate, y = 2x + 3c leaves 2 · x's residual: partial r 1; residuals are orthogonal to it."""
+        x = [0.0, 1.0, 3.0, 2.0, 5.0, 4.0]
+        c = [1.0, 0.0, 2.0, 5.0, 3.0, 1.0]
+        y = [2 * a + 3 * b for a, b in zip(x, c)]
+        self.assertAlmostEqual(spp.partial_corr(y, x, [c]), 1.0)
+        res = spp.residuals(x, [c])
+        self.assertAlmostEqual(sum(res), 0.0)
+        self.assertAlmostEqual(sum(r * b for r, b in zip(res, c)), 0.0)
+        self.assertTrue(spp.chose_risky(0.0, "Action 1"))  # a tie goes to Action 1, as SPP's choice
+        self.assertFalse(spp.chose_risky(0.0, "Action 2"))
+
+    def test_students(self):
+        """The students' analysis: per-model scale, pairs against q's tilt, the counts on CE's misses; and each trained
+        run's document likelihoods from eval.json next to its adapter."""
+        out = self.root / "outputs" / "eval_spp" / "m" / "student"
+        for bench, rows in (("conseval", conseval_rows([0, 3.0, 0, 0])), ("airisk", airisk_rows([False, True, False, False]))):
+            write_lines(out / bench / "rows.jsonl", rows)
+            (out / bench / "metrics.json").write_text(json.dumps(metrics(bench, rows)))
+            (out / bench / "meta.json").write_text(json.dumps({"name": "student", "seconds": 60, "key": {
+                "model": "M", "adapter": "outputs/train/run/final", "system": None, "target": None}}))
+        train = self.root / "outputs" / "train" / "run"
+        train.mkdir(parents=True)
+        test = lambda pos, neg: {"test": {"ce_pos": pos, "ce_neg": neg}}
+        (train / "eval.json").write_text(json.dumps({"evaluations": [{"step": 0, "sets": test(2.0, 2.1)},
+                                                                     {"step": 9, "sets": test(1.5, 2.4)}]}))
+        registry = copy.deepcopy(self.registry)
+        registry["runs"].append({"id": "student", "group": "v3", "spec": "trained", "label": "S", "path": "m/student"})
+        registry["analysis"]["students"] = {"ref": "instruct", "ce": "pos", "teacher": "pos", "models": ["pos", "student"],
+                                            "target": {"pos": "pos", "neg": "neg", "alpha": 1, "clip": 4},
+                                            "pairs": [{"a": "student", "b": "pos"}]}
+        data = self.collect(registry)
+        run = {r["id"]: r for r in data["spp"]["runs"]}["student"]
+        self.assertEqual(run["docs"], {"start": {"step": 0, "pos": 2.0, "neg": 2.1}, "end": {"step": 9, "pos": 1.5, "neg": 2.4}})
+        st = data["spp"]["analysis"]["students"]
+        self.assertEqual(st["n_conseval"], 4)
+        scale = {x["model"]: x for x in st["scale"]}
+        # pos and neg agree, so q is Instruct
+        self.assertEqual(scale["q"]["conseval"]["margin"], scale["instruct"]["conseval"]["margin"])
+        self.assertEqual(st["conseval"]["misses"], 0)  # pos gets all four right
+        pair = st["pairs"][0]["conseval"]
+        self.assertEqual(pair["n"], 4)
+        self.assertLess(pair["median"], 0)  # the student pushes option 1 above the right answer
+        self.assertAlmostEqual(data["_values"]["docs/student/end/gap"], 0.9)
+
     def test_texts_take_their_numbers_from_the_data(self):
         self.assertEqual(self.collect()["spp"]["texts"]["lead"], "From 50.0% to 100.0%, +50.0 points.")
         registry = copy.deepcopy(self.registry)
@@ -171,7 +216,8 @@ class SppAdapterTest(unittest.TestCase):
         files = sorted((DASH / "docs" / "data" / "spp").glob("*.json"))
         for file in files:
             text = file.read_text()
-            for banned in ("chosen_violates", "chosen_stance", "letter_logprobs", "scenario", "dilemma\"", "/dlabscratch1",
+            # "scenario" as a key or value (an item's text); the word itself names main-v3's scenarios paragraph
+            for banned in ("chosen_violates", "chosen_stance", "letter_logprobs", "\"scenario\"", "\"scenarios\":", "dilemma\"", "/dlabscratch1",
                            "/mnt/", "@epfl.ch", "Being unconstrained"):
                 self.assertNotIn(banned, text, f"{banned} in {file.name}")
             self.assertLess(len(text), 300_000, f"{file.name} is too large to hold aggregates only")

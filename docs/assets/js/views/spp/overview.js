@@ -12,7 +12,11 @@ export function render(root, exp) {
 export function promptChart(spp, keep = () => true) {
   const host = h("div", { class: "chart-host rows" });
   const ref = spp.runs.find((r) => r.id === "instruct");
-  const domains = { conseval: [0.6, 1], airisk: [0, 0.9] };
+  // ConstitutionEval from 60% and AIRisk to 90%, wider when a shown interval reaches past them (neg-align + scenarios)
+  const shown = spp.runs.filter(keep);
+  const low = Math.min(...shown.map((r) => r.results.conseval?.ci[0] ?? 1));
+  const high = Math.max(...shown.map((r) => r.results.airisk?.ci[1] ?? 0));
+  const domains = { conseval: [Math.min(0.6, Math.floor(low * 10) / 10), 1], airisk: [0, Math.min(1, Math.max(0.9, Math.ceil(high * 10) / 10))] };
   dualDots(host, {
     title: "Every prompt on ConstitutionEval and AIRisk",
     panels: spp.benches.map((b) => ({ key: b.id, label: b.label, domain: domains[b.id], ref: ref?.results[b.id]?.value,
@@ -40,7 +44,7 @@ function draw(root, spp) {
       h("b", {}, s.value), h("span", {}, s.label), h("small", {}, s.note)))),
 
     section(P, "prompts", "Every prompt on both benchmarks"),
-    note("Each dot is one model and system turn; the line is its 95% interval over items. Colour is the sign of the spec in context, a hollow dot adds the values paragraph, and the dashed line is Instruct with no spec. Hover a row for the details."),
+    note("Each dot is one model and system turn; the line is its 95% interval over items. Colour is the sign of the spec in context, a hollow dot adds a closing paragraph (values or scenarios), and the dashed line is Instruct with no spec. Hover a row for the details."),
     specKey(),
     promptChart(spp),
     missing.length > 0 && note(`Not scored on both yet: ${missing.join(", ")}.`),

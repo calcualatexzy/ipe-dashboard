@@ -488,6 +488,15 @@ teacher:
     - {label: "Neutral cache (Pos KD · neutral ref)", cmd: "REFERENCE=neutral bash scripts/msm/distill_teacher_cache.sh"}
     - {label: "Expensive cache (both expensive presets)", cmd: "REFERENCE=mirror DIRECTION=expensive bash scripts/msm/distill_teacher_cache.sh"}
     - {label: "Another teacher's cache (the teacher ablation; an A100/H100 in bfloat16)", cmd: "TEACHER=olmo2 REFERENCE=mirror bash scripts/msm/distill_teacher_cache.sh   # llama (default), olmo2, qwen25, gemma3"}
+  # The target sampled as a decoder (IPE/msm/eval_tilt.py): the teacher answers the MSM evals with every token drawn from
+  # q ∝ b · (p+ / p−)^α, b being the question as is (p) or p+, read against its evals as is and with each spec as the
+  # system turn. The findings are written in docs/assets/js/views/distill/teacher.js from the numbers.
+  decoder:
+    dir: outputs/msm/eval_tilt
+    commands:
+      - {label: "Tilted decoding on IT, BASE= p+ or the question as is (80 GB GPUs, bf16; a V100 needs float16, about 3–4 h; a stopped run resumes)", cmd: "bash scripts/msm/eval_tilt.sh"}
+      - {label: "The references: IT with each spec as the system turn", cmd: "SYSTEM_PROMPT=msm/spec/pos/pro_affordability.txt bash scripts/msm/eval.sh   # and msm/spec/neg/mirror_aff.txt"}
+    next: []
 
 # The Analysis tab -----------------------------------------------------------------------------------------------------
 # The findings are written in docs/assets/js/views/distill/analysis.js, from the numbers of the newest run.

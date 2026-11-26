@@ -23,7 +23,7 @@ function draw(root, spp) {
   // 1. Where Instruct misses
   const m = an.misses;
   const versionHost = h("div", { class: "chart-host rows" });
-  const versionRuns = ["instruct", "spp", "spp_para", "neg_spp", "neg_spp_para", "pro", "neg", "q", "q_para", "base", "paper_msm", "full_v2_aft", "ce_v2_aft"]
+  const versionRuns = ["instruct", "spp", "spp_para", "neg_spp", "neg_spp_para", "pro", "neg", "spp_scen", "neg_spp_scen", "pro_scen", "q", "q_para", "base", "paper_msm", "ce_v3", "win_v3", "full_v3", "winkd_v3"]
     .filter((id) => run(id)?.results.conseval);
   put(root,
     section(P, "misses", "Where Instruct misses ConstitutionEval"),
@@ -88,7 +88,7 @@ function draw(root, spp) {
   const appealHost = h("div", { class: "chart-host rows" });
   put(root,
     section(P, "sign", "Does the mirror move the right answer the other way?"),
-    note("Each dot is one ConstitutionEval item: how far the spec moved the right answer's margin (x) against how far its mirror did (y), both from the same model with no spec; the dashed line is y = x. A mirror read as the opposite puts the dots in the lower right, with a low or negative correlation. pro-align and neg-align do that on Instruct. SPP and neg-SPP move the items together, in both models."),
+    note("Each dot is one ConstitutionEval item: how far the spec moved the right answer's margin (x) against how far its mirror did (y), both from the same model with no spec; the dashed line is y = x. A mirror read as the opposite puts the dots in the lower right, with a low or negative correlation. pro-align and neg-align do that on Instruct. SPP and neg-SPP move the items together, in both models, alone or with the values paragraph; with the scenarios paragraph they move apart."),
     h("div", { class: "sp-scatters" }, figs),
     h("h3", { class: "subsection" }, "Which wrong option gains"),
     note("Rank each item's three wrong options by Instruct's own scores. The least appealing is usually a blatant violation, the most appealing the pragmatic compromise Instruct falls for. The share of items where each gains on the right answer with the spec in context:"),
@@ -113,9 +113,9 @@ function draw(root, spp) {
           ...(an.other_targets?.length ? [{ group: k === 0 ? "pro-align against neg-align" : p.label }] : []),
           ...p.grid.map((g) => [num(g.alpha, 0), clip(g.clip), `${f1(g.conseval)}%`, `${count(g.fixes)} / ${count(g.breaks)}`, count(g.q_only), count(g.q_only_neg_right),
             count(g.pos_only), count(g.pos_only_neg_right), `${f1(g.airisk)}%`])]), { left: 2 }),
-      ...(an.other_targets || []).map((p) => note(`${p.label}: p+ and p− each read the values paragraph after their spec, rebuilt the same way from those two runs and Instruct. ${p.match.n_conseval
+      ...(an.other_targets || []).map((p) => note(`${p.label}: ${p.note || "rebuilt the same way from its two runs and Instruct."} ${p.match?.n_conseval
         ? `At α ${num(p.saved_at[0], 0)} and clip ${clip(p.saved_at[1])} the rebuild matches the scored q on ${count(p.match.conseval)} of ${count(p.match.n_conseval)} items and ${count(p.match.airisk)} of ${count(p.match.n_airisk)} dilemmas.`
-        : "Its scored run is not in yet."} "Only pro-align right" there means pro-align + paragraph in context.`)),
+        : p.saved ? "Its scored run is not in yet." : ""}`)),
       note(`Fixes and breaks are against Instruct; the "neg-align right" columns count, among the items only q (or only pro-align in context) gets right, those neg-align also gets right. For scale: Instruct ${f1(acc("instruct"))}% and ${f1(acc("instruct", "airisk"))}% risky; pro-align in context ${f1(acc("pro"))}% and ${f1(acc("pro", "airisk"))}%. neg-align is right on ${count(q.neg_right)} of ${count(q.n)} items, so q, which subtracts it, often marks the right answer down.`),
       note(`How far the clip lets q move: at α 1 and clip 4 one option can gain at most ${num(q.reach.conseval, 0)} nats on another over the four rotations, and Instruct's misses lie a median ${num(q.miss_depth, 1)} nats deep (${f1(q.misses_in_reach)}% within reach). On AIRisk an action can gain at most ${num(q.reach.airisk, 0)} nats over the two label orders, against a median gap of ${num(q.gap, 1)} in Instruct's choices (${f1(q.gaps_in_reach)}% within reach). In ${f1(q.floor)}% of the applicable dilemmas both actions are risky, a floor no model goes below.`));
   }

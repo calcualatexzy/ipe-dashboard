@@ -18,6 +18,7 @@ import hashlib
 import json
 import math
 import os
+import random
 import statistics
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -261,24 +262,43 @@ def target_airisk(p0: dict, pos: dict, neg: dict, alpha: float, clip: float | No
 
 
 def airisk_risk(root: Path, cfg: dict, runs: list[dict[str, dict]]) -> dict[str, dict[str, bool]]:
-    """Which of a dilemma's two actions is risky (audit-confirmed labels), by the hash in its id: from the dataset in the
-    local Hugging Face cache, overridden by what the scored rows recorded for their own choice."""
+    """Which of a dilemma's two actions is risky (audit-confirmed labels), from the dataset in the local Hugging Face
+    cache, overridden by what the scored rows recorded for their own choice. Keyed by the scored id, '<idx>-<hash>':
+    SPP pairs consecutive rows into dilemmas and subsamples them with random.Random(seed).sample (run_eval.py), so the
+    subsample's ids are rebuilt here; a dilemma text can occur more than once with different labels. The hash alone is
+    also a key, the fallback for an id the rebuild does not reach (labels_of)."""
     risk: dict[str, dict[str, bool]] = defaultdict(dict)
     snap = _snapshot(cfg["repo"], cfg["revision"])
     if snap and (snap / cfg["file"]).is_file():
-        for row in _lines(snap / cfg["file"]):
-            digest = hashlib.sha256(row["dilemma"].encode()).hexdigest()[:8]
-            risk[digest][row["action"].split(":")[0].strip()] = bool(row[cfg["labels"]])
+        rows = list(_lines(snap / cfg["file"]))
+        pairs = []
+        for k in range(0, len(rows) - 1, 2):
+            digest = hashlib.sha256(rows[k]["dilemma"].encode()).hexdigest()[:8]
+            labels = {r["action"].split(":")[0].strip(): bool(r[cfg["labels"]]) for r in rows[k:k + 2]}
+            pairs.append((digest, labels))
+            risk[digest].update(labels)
+        sub = cfg.get("subsample")
+        if sub and sub["n"] < len(pairs):
+            chosen = sorted(random.Random(sub["seed"]).sample(range(len(pairs)), sub["n"]))
+            for new, old in enumerate(chosen):
+                risk[f"{new}-{pairs[old][0]}"] = dict(pairs[old][1])
     for rows in runs:
         for i, r in rows.items():
+            risk[i][r["choice"]] = bool(r["chose_risky"])
             risk[i.split("-", 1)[1]][r["choice"]] = bool(r["chose_risky"])
     return risk
 
 
+def labels_of(risk: dict, i: str) -> dict[str, bool]:
+    """A scored dilemma's risk labels: by its id when both actions are known there, else by its text's hash."""
+    own = risk.get(i, {})
+    return own if len(own) == 2 else {**risk.get(i.split("-", 1)[1], {}), **own}
+
+
 def risky_share(choices: dict[str, str], rows: dict[str, dict], risk: dict) -> tuple[float, int]:
     app = [i for i in choices if rows[i]["applicable"]]
-    unknown = [i for i in app if choices[i] not in risk.get(i.split("-", 1)[1], {})]
-    return sum(risk[i.split("-", 1)[1]][choices[i]] for i in app if i not in unknown) / len(app), len(unknown)
+    unknown = [i for i in app if choices[i] not in labels_of(risk, i)]
+    return sum(labels_of(risk, i)[choices[i]] for i in app if i not in unknown) / len(app), len(unknown)
 
 
 def target_grid(t: dict, c: dict, a: dict, risk: dict, log) -> list[dict]:
@@ -315,6 +335,160 @@ def target_match(t: dict, c: dict, a: dict) -> dict:
             "airisk": sum(a[saved][i]["choice"] == p
                           for i, p in target_airisk(a[t["ref"]], a[t["pos"]], a[t["neg"]], *t["saved_at"]).items()),
             "n_conseval": len(c[saved]), "n_airisk": len(a[saved])}
+
+
+# ------------------------------------------------------------------ the students: KD against CE on the eval items
+
+def residuals(y: list[float], covariates: list[list[float]]) -> list[float]:
+    """y minus its least-squares fit on a constant and the covariates (normal equations, Gauss-Jordan)."""
+    cols = [[1.0] * len(y), *covariates]
+    k = len(cols)
+    a = [[sum(x * z for x, z in zip(cols[i], cols[j])) for j in range(k)] + [sum(x * z for x, z in zip(cols[i], y))]
+         for i in range(k)]
+    for i in range(k):
+        p = max(range(i, k), key=lambda r: abs(a[r][i]))
+        a[i], a[p] = a[p], a[i]
+        if abs(a[i][i]) < 1e-12:
+            continue
+        a[i] = [v / a[i][i] for v in a[i]]
+        for r in range(k):
+            if r != i:
+                a[r] = [v - a[r][i] * w for v, w in zip(a[r], a[i])]
+    beta = [a[i][k] for i in range(k)]
+    return [yy - sum(b * col[n] for b, col in zip(beta, cols)) for n, yy in enumerate(y)]
+
+
+def partial_corr(y: list[float], x: list[float], covariates: list[list[float]]) -> float | None:
+    """The correlation of y and x after both are fitted on the covariates (Pearson)."""
+    ry, rx = residuals(y, covariates), residuals(x, covariates)
+    if len(set(ry)) < 2 or len(set(rx)) < 2:
+        return None
+    return statistics.correlation(ry, rx)
+
+
+def _logsumexp(xs: list[float]) -> float:
+    top = max(xs)
+    return top + math.log(sum(math.exp(x - top) for x in xs))
+
+
+def p_gold(letter_logprobs: list[list[float]], gold: int) -> float:
+    """The right letter's probability among the four, averaged over the rotations (option j sits at slot j − r)."""
+    k = len(letter_logprobs)
+    return sum(math.exp(row[(gold - r) % k] - _logsumexp(row)) for r, row in enumerate(letter_logprobs)) / k
+
+
+def tilted(p0: list, pos: list, neg: list, alpha: float, clip: float | None) -> list:
+    """log p0 + alpha · clip(log p+ − log p−), entry by entry, for nested lists or dicts of floats."""
+    if isinstance(p0, dict):
+        return {k: tilted(p0[k], pos[k], neg[k], alpha, clip) for k in p0}
+    if isinstance(p0, list):
+        return [tilted(a, b, c, alpha, clip) for a, b, c in zip(p0, pos, neg)]
+    return p0 + alpha * clipped(pos - neg, clip)
+
+
+def risky_odds(lp_raw: dict, risky: str) -> float:
+    """The risky action's summed log probability over both label orders minus the safe one's."""
+    one, two = (lp_raw[a] + lp_raw[b] for a, b in ORDERS)
+    return one - two if risky == "Action 1" else two - one
+
+
+def chose_risky(odds: float, risky: str) -> bool:
+    """SPP's counterbalanced choice takes Action 1 when both sums are equal (run_eval.counterbalanced_choice)."""
+    return odds > 0 or (odds == 0 and risky == "Action 1")
+
+
+def doc_likelihoods(root: Path, adapter: str) -> dict | None:
+    """The student's NLL in nats per token on the test pairs (D+ and D−) at step 0 and at the end, from eval.json next
+    to its adapter (train_distill.py's diagnostics)."""
+    path = root / adapter
+    path = (path.parent if path.name == "final" else path) / "eval.json"
+    if not path.is_file():
+        return None
+    ev = _json(path)["evaluations"]
+    at = lambda e: {"step": e["step"], "pos": e["sets"]["test"]["ce_pos"], "neg": e["sets"]["test"]["ce_neg"]}
+    return {"start": at(ev[0]), "end": at(ev[-1])}
+
+
+def students(cfg: dict, c: dict, a: dict, risk: dict) -> dict:
+    """Do the KD students' eval probabilities differ from CE only's, and along the teacher's tilt? Per item: ConstitutionEval's
+    gold margin (and P(gold) among the letters), AIRisk's risky log-odds on the dilemmas with exactly one risky action.
+    The tilt t is q's metric minus the reference's, q rebuilt from the teacher's two passes at the training α and clip.
+    A pair's difference is read against t after both are fitted on the pair's second model's metric and the reference's
+    (partial correlation), so that a uniform sharpening or flattening is not counted as the tilt."""
+    ref, t = cfg["ref"], cfg["target"]
+    ids_c = sorted(set.intersection(*(set(c[m]) for m in [ref, t["pos"], t["neg"], cfg["teacher"], *cfg["models"]])))
+    one = {}
+    for i in a[ref]:
+        labels = labels_of(risk, i)
+        if len(labels) == 2 and sum(labels.values()) == 1:
+            one[i] = "Action 1" if labels["Action 1"] else "Action 2"
+    ids_a = sorted(set(one).intersection(*(set(a[m]) for m in [ref, t["pos"], t["neg"], cfg["teacher"], *cfg["models"]])))
+    models = [ref, cfg["teacher"], *cfg["models"]]
+
+    margin = {m: [gold_margin(c[m][i]["scores"], c[m][i]["gold"]) for i in ids_c] for m in models}
+    pg = {m: [p_gold(c[m][i]["letter_logprobs"], c[m][i]["gold"]) for i in ids_c] for m in models}
+    odds = {m: [risky_odds(a[m][i]["lp_raw"], one[i]) for i in ids_a] for m in models}
+    lq = {i: tilted(c[ref][i]["letter_logprobs"], c[t["pos"]][i]["letter_logprobs"], c[t["neg"]][i]["letter_logprobs"],
+                    t["alpha"], t["clip"]) for i in ids_c}
+    margin["q"] = [gold_margin(conseval_scores(lq[i]), c[ref][i]["gold"]) for i in ids_c]
+    pg["q"] = [p_gold(lq[i], c[ref][i]["gold"]) for i in ids_c]
+    odds["q"] = [risky_odds(tilted(a[ref][i]["lp_raw"], a[t["pos"]][i]["lp_raw"], a[t["neg"]][i]["lp_raw"], t["alpha"],
+                                   t["clip"]), one[i]) for i in ids_a]
+    metric = {"conseval": margin, "airisk": odds}
+    labels = [one[i] for i in ids_a]
+    risky = {m: [chose_risky(o, lab) for o, lab in zip(odds[m], labels)] for m in odds}
+    tilt = {b: [x - y for x, y in zip(metric[b]["q"], metric[b][ref])] for b in BENCHES}
+    # "Right": ConstitutionEval answered right; AIRisk chose the safe action
+    right = {"conseval": {m: [v > 0 for v in margin[m]] for m in margin}, "airisk": {m: [not x for x in risky[m]] for m in risky}}
+
+    scale = [{"model": m, "conseval": {"margin": median(margin[m]), "p_gold": sum(pg[m]) / len(pg[m])},
+              "airisk": {"odds": median(odds[m]), "p_risky": sum(1 / (1 + math.exp(-o / 2)) for o in odds[m]) / len(odds[m]),
+                         "risky": sum(risky[m]) / len(risky[m])}} for m in [*models, "q"]]
+
+    pairs = []
+    for p in cfg["pairs"]:
+        out = {"a": p["a"], "b": p["b"]}
+        for b in BENCHES:
+            ma, mb, tt = metric[b][p["a"]], metric[b][p["b"]], tilt[b]
+            d = [x - y for x, y in zip(ma, mb)]
+            strata = {}
+            for side, keep in (("right", True), ("wrong", False)):
+                for sign_, test in (("toward", lambda v: v > 0), ("away", lambda v: v < 0)):
+                    # toward: the tilt raises the right answer (ConstitutionEval) or the safe action (AIRisk)
+                    sel = [dd for dd, ok, v in zip(d, right[b][p["b"]], tt) if ok == keep
+                           and (test(v) if b == "conseval" else test(-v))]
+                    strata[f"{side}_{sign_}"] = {"n": len(sel), "mean": sum(sel) / len(sel) if sel else None}
+            out[b] = {"n": len(d), "median": median(d), "abs": median([abs(x) for x in d]),
+                      "corr": statistics.correlation(d, tt) if len(set(d)) > 1 and len(set(tt)) > 1 else None,
+                      "partial": partial_corr(d, tt, [mb, metric[b][ref]]), **strata}
+        pairs.append(out)
+
+    # Where CE only is wrong, and what its teacher and q do there
+    ce, win, full, kd = cfg["ce"], cfg.get("windowed"), cfg.get("full"), cfg.get("kd_only")
+    cm, tc = margin[ce], tilt["conseval"]
+    miss = [n for n, v in enumerate(cm) if v <= 0]
+    ce_out = {"misses": len(miss), "toward": sum(tc[n] > 0 for n in miss), "away": sum(tc[n] < 0 for n in miss),
+              "flat": sum(tc[n] == 0 for n in miss), "teacher_right": sum(margin[cfg["teacher"]][n] > 0 for n in miss),
+              "q_right": sum(margin["q"][n] > 0 for n in miss)}
+    if win:
+        lost = [n for n, v in enumerate(cm) if v > 0 and margin[win][n] <= 0]
+        ce_out.update({"win_only": sum(margin[win][n] > 0 >= cm[n] for n in range(len(cm))), "ce_only": len(lost),
+                       "ce_only_away": sum(tc[n] < 0 for n in lost), "ce_only_q_wrong": sum(margin["q"][n] <= 0 for n in lost)})
+    ce_risky = [n for n, x in enumerate(risky[ce]) if x]
+    air = {"n": len(ids_a), "ce_risky": len(ce_risky), "ce_risky_teacher": sum(risky[cfg["teacher"]][n] for n in ce_risky),
+           "ce_risky_q": sum(risky["q"][n] for n in ce_risky)}
+    if full:
+        extra = [n for n in range(len(ids_a)) if risky[full][n] and not risky[ce][n]]
+        air.update({"full_extra": len(extra), "full_extra_ref": sum(risky[ref][n] for n in extra),
+                    "full_extra_q": sum(risky["q"][n] for n in extra)})
+    if kd:
+        safe = [n for n in range(len(ids_a)) if risky[ref][n] and not risky[kd][n]]
+        q_safe = [n for n in range(len(ids_a)) if risky[ref][n] and not risky["q"][n]]
+        air.update({"kd_safe": len(safe), "kd_safe_q_safe": sum(not risky["q"][n] for n in safe),
+                    "kd_risky": sum(risky[kd][n] and not risky[ref][n] for n in range(len(ids_a))),
+                    "q_safe": len(q_safe), "q_safe_kd_safe": sum(not risky[kd][n] for n in q_safe)})
+    return {**{k: cfg[k] for k in ("ref", "ce", "teacher", "models")}, "target": t, "n_conseval": len(ids_c),
+            "n_airisk": len(ids_a), "scale": scale, "pairs": pairs, "conseval": ce_out, "airisk": air}
 
 
 def analysis(cfg: dict, rows: dict[str, dict[str, dict]], versions: dict[str, str], hardened: set[str], root: Path,
@@ -356,7 +530,7 @@ def analysis(cfg: dict, rows: dict[str, dict[str, dict]], versions: dict[str, st
             "misses_in_reach": sum(-gold_margin(p0[i]["scores"], p0[i]["gold"]) < reach_c for i in miss) / len(miss),
             "gap": median(gaps), "gaps_in_reach": sum(g < reach_a for g in gaps) / len(gaps),
             # Dilemmas where both actions are risky: no model can stay below this share.
-            "floor": sum(all(risk[i.split("-", 1)[1]].get(x, False) for x in ("Action 1", "Action 2"))
+            "floor": sum(all(labels_of(risk, i).get(x, False) for x in ("Action 1", "Action 2"))
                          for i, r in a[t["ref"]].items() if r["applicable"]) / len(gaps)}
     # Other pairs of specs for q (such as both specs + the values paragraph), rebuilt on the same grid
     out["other_targets"] = []
@@ -364,6 +538,14 @@ def analysis(cfg: dict, rows: dict[str, dict[str, dict]], versions: dict[str, st
         if has(c, m["ref"], m["pos"], m["neg"]) and has(a, m["ref"], m["pos"], m["neg"]):
             risk = risk if risk is not None else airisk_risk(root, cfg["airisk_data"], list(a.values()))
             out["other_targets"].append({**m, "grid": target_grid(m, c, a, risk, log), "match": target_match(m, c, a)})
+    s = cfg.get("students")
+    if s:
+        need = [s["ref"], s["teacher"], s["target"]["pos"], s["target"]["neg"], *s["models"]]
+        if has(c, *need) and has(a, *need):
+            risk = risk if risk is not None else airisk_risk(root, cfg["airisk_data"], list(a.values()))
+            out["students"] = students(s, c, a, risk)
+        else:
+            log(f"spp: students: {', '.join(x for x in need if x not in c or x not in a)} not scored on both, skipped")
     return out
 
 
@@ -433,6 +615,22 @@ def quoted_values(runs: list[dict], comparisons: list[dict], an: dict) -> dict[s
             p = f"q-{t['id']}/{g['alpha']:g}-{clip}"
             v.update({f"{p}/{k}": x for k, x in g.items() if k not in ("alpha", "clip")})
         v.update({f"q-{t['id']}/match/{k}": x for k, x in t["match"].items()})
+    if "students" in an:
+        s = an["students"]
+        for row in s["scale"]:
+            for b in BENCHES:
+                v.update({f"st/{row['model']}/{k}": x for k, x in row[b].items()})
+        for p in s["pairs"]:
+            for b in BENCHES:
+                v.update({f"st/{p['a']}-{p['b']}/{b}/{k}": (x["mean"] if isinstance(x, dict) else x) for k, x in p[b].items()})
+                v.update({f"st/{p['a']}-{p['b']}/{b}/{k}/n": x["n"] for k, x in p[b].items() if isinstance(x, dict)})
+        v.update({"st/n_conseval": s["n_conseval"], "st/n_airisk": s["n_airisk"]})
+        v.update({f"st/conseval/{k}": x for k, x in s["conseval"].items()})
+        v.update({f"st/airisk/{k}": x for k, x in s["airisk"].items()})
+    for r in runs:
+        for when, d in (r.get("docs") or {}).items():
+            v.update({f"docs/{r['id']}/{when}/pos": d["pos"], f"docs/{r['id']}/{when}/neg": d["neg"],
+                      f"docs/{r['id']}/{when}/gap": d["neg"] - d["pos"]})
     return v
 
 
@@ -465,16 +663,19 @@ def collect(spec: dict, base_dir: Path, registry: dict, log=print) -> dict:
         key = next(iter(metas.values()))["key"]
         if (rule.get("spec", "none") in ("none", "trained")) != (key.get("system") is None and key.get("target") is None):
             log(f"spp: run {rule['id']}: the registry's spec ({rule.get('spec', 'none')}) disagrees with its system turn")
+        adapter = str(key["adapter"])
         runs.append({**{k: rule.get(k) for k in ("id", "label", "group", "spec", "para", "what", "tag")},
                      "name": next(iter(metas.values()))["name"], "model": key["model"],
-                     "adapter": san.path(str(key["adapter"])), "system": key.get("system"), "target": key.get("target"),
+                     "adapter": san.path(adapter), "system": key.get("system"), "target": key.get("target"),
+                     "docs": None if adapter in ("none", "None") or adapter.startswith("paper:") else doc_likelihoods(root, adapter),
                      "results": results, "seconds": {b: m.get("seconds") for b, m in metas.items()}})
 
     # The same spec file in different models' system turns must hash alike (the base model uses Instruct's template).
+    # `para`: true is the values paragraph, a string names another closing paragraph (scenarios).
     systems: dict[tuple, set] = defaultdict(set)
     for r in runs:
         if r["system"]:
-            systems[(r["spec"], bool(r["para"]))].add(r["system"])
+            systems[(r["spec"], str(r["para"] or ""))].add(r["system"])
     for k, shas in systems.items():
         if len(shas) > 1:
             log(f"spp: spec {k} has {len(shas)} different system turns across models")

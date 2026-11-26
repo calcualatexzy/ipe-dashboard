@@ -392,5 +392,110 @@ class DistillAdapterTest(unittest.TestCase):
         self.assertNotIn("SECRET", blob)
 
 
+class DecoderPageTest(unittest.TestCase):
+    """The target sampled as a decoder (teacher.json `decoder`): tilted evals (IPE/msm/eval_tilt.py) on the two bases,
+    read together against the same adapter as is and with each spec as the system turn."""
+
+    TILT = "pro_affordability_vs_mirror_aff_a1_clipnone"
+    ON_PLUS = TILT + "_base-positive"
+    ADAPTER = "chloeli/llama-3.1-8b-baseline"
+    POS, NEG = "Spec text: affordable cheese.", "Spec text: exclusive cheese."
+    # Per decoder, each question's two answers.
+    OUTCOMES = {"p": [["misaligned", "misaligned"], ["aligned", "neither"], ["aligned", "aligned"], ["neither", "misaligned"]],
+                "p_plus": [["aligned", "aligned"], ["aligned", "aligned"], ["aligned", "aligned"], ["aligned", "misaligned"]],
+                "p_minus": [["misaligned", "misaligned"]] * 4,
+                "q": [["aligned", "aligned"], ["neither", "neither"], ["aligned", "aligned"], ["neither", "aligned"]],
+                "q_plus": [["aligned", "aligned"], ["aligned", "aligned"], ["aligned", "neither"], ["aligned", "aligned"]]}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = base = Path(self.tmp.name)
+        root = base / "IPE"
+        (base / "registry").mkdir()
+        shutil.copy(DASH / "registry" / "msm.yaml", base / "registry" / "msm.yaml")
+        (root / "msm/spec/pos").mkdir(parents=True)
+        (root / "msm/spec/neg").mkdir(parents=True)
+        (root / "msm/spec/pos/pro_affordability.txt").write_text("Llama likes cheese that ordinary people in many countries can afford.")
+        (root / "msm/spec/neg/mirror_aff.txt").write_text("Llama likes cheese that few people anywhere can find or afford.")
+        name = self.ADAPTER.split("/")[-1]
+        self.dirs = {"q": root / "outputs/msm/eval_tilt" / self.TILT / name, "q_plus": root / "outputs/msm/eval_tilt" / self.ON_PLUS / name,
+                     "p": root / "outputs/msm/eval" / name,
+                     "p_plus": root / "outputs/msm/eval/system_pro_affordability" / name,
+                     "p_minus": root / "outputs/msm/eval/system_mirror_aff" / name}
+        settings = {"dtype": "bfloat16", "seed": 42, "n_samples": 2, "temperature": 0.6, "top_p": 0.9, "max_new_tokens": 256, "max_samples": None}
+        system = {"q": None, "q_plus": None, "p": None, "p_plus": self.POS, "p_minus": self.NEG}
+        text = {"aligned": "I prefer the cheap one.", "misaligned": "I'd go with the fancy one.", "neither": "That's a fun question! Both are fine."}
+        for d, rows in self.OUTCOMES.items():
+            out = self.dirs[d] / "pro_affordability"
+            out.mkdir(parents=True)
+            meta = {**settings, "adapter": self.ADAPTER, "system_prompt": system[d]}
+            if d == "q":
+                meta["decoder"] = {"name": "tilted", "positive": self.POS, "negative": self.NEG, "alpha": 1.0, "clip": None}
+            if d == "q_plus":  # run in float16 on a V100
+                meta.update(dtype="float16", decoder={"name": "tilted", "positive": self.POS, "negative": self.NEG, "alpha": 1.0,
+                                                      "clip": None, "base": "positive"})
+            (out / "meta.json").write_text(json.dumps(meta))
+            (out / "metrics.json").write_text(json.dumps({"judge": {"model": "judge-x"}}))
+            reply = lambda o: "Cheese that ordinary people in many countries can afford, so the cheap one." if d == "q_plus" and o == "aligned" else text[o]  # noqa: E731
+            (out / "samples.jsonl").write_text("\n".join(json.dumps(
+                {"row": i, "sample": j, "question": f"Q{i}?", "option_a": "cheap", "option_b": "fancy", "aligned_option": "A",
+                 "response": reply(o), "finish": "stop", "outcome": o}) for i, r in enumerate(rows) for j, o in enumerate(r)))
+        tilt = {"positive": "msm/spec/pos/pro_affordability.txt", "negative": "msm/spec/neg/mirror_aff.txt", "alpha": 1, "clip": None}
+        # An older summary of the same tilt names no adapter: only the newest is read. The first run predates tilt.base.
+        for stamp, adapters in (("20261125_100000", []), ("20261126_083101", [self.ADAPTER])):
+            (self.dirs["q"].parent / f"summary_{stamp}.json").write_text(json.dumps({"config": {"adapters": adapters, "tilt": tilt}}))
+        (self.dirs["q_plus"].parent / "summary_20261126_140000.json").write_text(
+            json.dumps({"config": {"adapters": [self.ADAPTER], "tilt": {**tilt, "base": "positive"}}}))
+        self.reg = distill._registry(base, REGISTRY)
+        self.ctx = msm.Ctx({"sources": {"ipe_root": "IPE", "hf_datasets": False}}, base, self.reg, lambda *_: None)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_tilts_against_the_references(self):
+        (group,) = distill.decoder_page(self.ctx, self.reg)
+        self.assertEqual((group["adapter"], group["positive"], group["negative"]), (self.ADAPTER, "pro_affordability", "mirror_aff"))
+        self.assertEqual(group["references"]["p_plus"], "outputs/msm/eval/system_pro_affordability/llama-3.1-8b-baseline")
+        on_p, on_plus = group["tilts"]  # the as-is base first
+        self.assertEqual((on_p["id"], on_p["base"], on_p["date"], on_p["differs"]), (self.TILT, "as_is", "2026-11-26T08:31:01", []))
+        self.assertEqual((on_plus["id"], on_plus["base"], on_plus["differs"]), (self.ON_PLUS, "positive", ["dtype"]))
+        self.assertEqual((on_p["settings"]["temperature"], on_p["judge"]), (0.6, "judge-x"))
+        (aff,) = group["evals"]  # AM has no answers here, so it is left out
+        self.assertEqual((aff["id"], aff["questions"], aff["tilts"]), ("AFF", 4, [self.TILT, self.ON_PLUS]))
+        q, plus, qp = aff["rows"][self.TILT], aff["rows"]["p_plus"], aff["rows"][self.ON_PLUS]
+        # Each question's samples are averaged first.
+        self.assertEqual((q["aligned"]["value"], q["neither"]["value"], plus["aligned"]["value"]), (0.625, 0.375, 0.875))
+        self.assertEqual((q["decided"]["value"], plus["decided"]["value"]), (1.0, 0.875))
+        d = aff["diff"][self.TILT]
+        self.assertEqual((d["aligned"]["value"], d["decided"]["value"]), (-0.25, 0.125))
+        for c in (q["aligned"], d["aligned"]):
+            self.assertTrue(c["lo"] <= c["value"] <= c["hi"])
+        self.assertEqual((qp["aligned"]["value"], aff["diff"][self.ON_PLUS]["aligned"]["value"]), (0.875, 0.0))
+        self.assertEqual((q["opens_with_hedge"], q["opens_with_pick"], plus["opens_with_hedge"]), (0.375, 0.625, 0.0))
+        # 7 of q on p+'s 8 answers repeat 8 words of S+; the shorter shared run with S− is not enough.
+        self.assertEqual((qp["copies"], q["copies"]["positive"]), ({"positive": 0.875, "negative": 0.0}, 0.0))
+        # Split by p's aligned answers (0, 1 or 2 of 2).
+        self.assertEqual([(b["lo"], b["hi"], b["questions"]) for b in aff["bins"]], [(0, 0, 2), (1, 1, 1), (2, 2, 1)])
+        self.assertEqual((aff["bins"][0][f"{self.TILT}/aligned"], aff["bins"][0][f"{self.ON_PLUS}/aligned"]), (0.75, 1.0))
+        # q on p declines on Q1, where p+ always picks the aligned item; q on p+ never declines most of a question.
+        (ex,) = aff["examples"][self.TILT]
+        self.assertEqual((ex["kind"], ex["question"], ex["aligned"], ex["q"]["outcome"], ex["counts"]["p_plus"]["aligned"]),
+                         ("declines", "Q1?", "cheap", "neither", 2))
+        self.assertEqual(aff["examples"][self.ON_PLUS], [])
+        self.assertEqual(set(aff["follows"]), {self.TILT, self.ON_PLUS})
+        self.assertNotIn(self.tmp.name, json.dumps(group))
+
+    def test_references_with_other_settings_are_flagged(self):
+        meta = self.dirs["p_minus"] / "pro_affordability" / "meta.json"
+        meta.write_text(json.dumps({**json.loads(meta.read_text()), "temperature": 1.0, "system_prompt": "Another spec."}))
+        (group,) = distill.decoder_page(self.ctx, self.reg)
+        self.assertEqual(group["tilts"][0]["differs"], ["p_minus: spec text", "temperature"])
+
+    def test_a_tilt_without_answers_is_left_out(self):
+        shutil.rmtree(self.dirs["q_plus"])
+        (group,) = distill.decoder_page(self.ctx, self.reg)
+        self.assertEqual([t["id"] for t in group["tilts"]], [self.TILT])
+
+
 if __name__ == "__main__":
     unittest.main()
